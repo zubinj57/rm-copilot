@@ -1,87 +1,109 @@
 # src/chroma_ingest.py
 import os
+import logging
+import traceback
+from typing import List, Tuple, Dict, Any
+ 
 import pandas as pd
 from dotenv import load_dotenv
-from typing import List, Tuple, Dict, Any
-
 from langchain_openai import OpenAIEmbeddings
 from langchain_chroma import Chroma
 from langchain.schema import Document
-from db_utils import get_pg_conn
-
+from sqlalchemy import create_engine
+ 
+ 
+ 
+# -----------------------------------------------------------------------------
+# Config & Setup
+# -----------------------------------------------------------------------------
 load_dotenv()
-
-PERSIST_DIR = os.getenv("CHROMA_PERSIST_DIR", "./chroma_db")
-OPENAI_KEY = os.getenv("OPENAI_API_KEY")
+ 
+# PERSIST_DIR: str = os.getenv("CHROMA_PERSIST_DIR", "./chroma_db")
+OPENAI_KEY: str | None = os.getenv("OPENAI_API_KEY")
+ 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+)
+ 
+if not OPENAI_KEY:
+    raise ValueError("OPENAI_API_KEY is not set in environment variables.")
+ 
 embeddings = OpenAIEmbeddings(openai_api_key=OPENAI_KEY)
-
-
-
-
-def fetch_daily_summaries(property_code,as_of_date) -> pd.DataFrame:
+ 
+ 
+# -----------------------------------------------------------------------------
+# Data Fetching
+# -----------------------------------------------------------------------------
+def fetch_daily_summaries(propertyCode, AsOfDate) -> pd.DataFrame:
     """Fetch latest daily summaries from Postgres."""
-    with get_pg_conn() as conn:
-        query = f"""
-        SELECT
-            "AsOfDate",
-            "Dates",
-            "Inventory",
-            "RoomSold",
-            "TotalRevenue",
-            "ADR",
-            "AvailableOccupancy",
-            "RevPAR",
-            "Occperc",
-            "OutOfOrder",
-            "RoomsOfAvailable",
-            "DayOfWeek",
-            "WeekType",
-            "GroupADR",
-            "GroupBlock",
-            "GroupOTB",
-            "GroupRevenue",
-            "TransientRoomSold",
-            "TransientRevenue",
-            "TransientADR",
-            "LYTotalInventory",
-            "LYTotalRoomSold",
-            "LYTotalRevenue",
-            "LYTotalADR",
-            "LYTotalOccupancy",
-            "LYTotalRevPar",
-            "LYTotalOccPerc",
-            "LYPaceInventory",
-            "LYPaceRoomSold",
-            "LYPaceRevenue",
-            "LYPaceADR",
-            "LYPaceOccupancy",
-            "LYPaceRevPar",
-            "LYPaceOccPerc"
-        FROM dailydata_transaction
-        WHERE 
-        "propertyCode" = '{property_code}'
-        and "AsOfDate" = '{as_of_date}'
-        and "Dates" BETWEEN (CURRENT_DATE - INTERVAL '1 month') 
-                            AND (CURRENT_DATE + INTERVAL '3 month')
-        ORDER BY "AsOfDate" DESC;
-        """
-        return pd.read_sql(query, conn)
-
-
-def daily_summaries_docs(property_code,as_of_date) -> Tuple[List[Document], List[Dict[str, Any]], List[str]]:
+    q =f"""
+   SELECT
+    "AsOfDate",
+    "Dates",
+    "Inventory",
+    "RoomSold",
+    "TotalRevenue",
+    "ADR",
+    "AvailableOccupancy",
+    "RevPAR",
+    "Occperc",
+    "OutOfOrder",
+    "RoomsOfAvailable",
+    "DayOfWeek",
+    "WeekType",
+    "GroupADR",
+    "GroupBlock",
+    "GroupOTB",
+    "GroupRevenue",
+    "TransientRoomSold",
+    "TransientRevenue",
+    "TransientADR",
+    "LYTotalInventory",
+    "LYTotalRoomSold",
+    "LYTotalRevenue",
+    "LYTotalADR",
+    "LYTotalOccupancy",
+    "LYTotalRevPar",
+    "LYTotalOccPerc",
+    "LYPaceInventory",
+    "LYPaceRoomSold",
+    "LYPaceRevenue",
+    "LYPaceADR",
+    "LYPaceOccupancy",
+    "LYPaceRevPar",
+    "LYPaceOccPerc"
+FROM dailydata_transaction
+WHERE
+"propertyCode" = '{propertyCode}'
+and "AsOfDate" = '{AsOfDate}'
+and "Dates" BETWEEN (CURRENT_DATE - INTERVAL '1 month')
+                    AND (CURRENT_DATE + INTERVAL '3 month')
+ORDER BY "AsOfDate" DESC;"""
+ 
+ 
+ 
+    engine = create_engine("postgresql+psycopg2://postgres:9MGPMPiDn2RdegC2QMhc@backup-db-ema-postgres.cryru6bacdry.us-east-1.rds.amazonaws.com:5432/AC32AW")
+    with engine.connect() as conn:
+        return pd.read_sql(q, conn)
+ 
+ 
+# -----------------------------------------------------------------------------
+# Document Preparation
+# -----------------------------------------------------------------------------
+def daily_summaries_docs(propertyCode, AsOfDate) -> Tuple[List[Document], List[Dict[str, Any]], List[str]]:
     """Convert daily summaries into Document objects, metadata, and IDs."""
-    df = fetch_daily_summaries(property_code,as_of_date)
-    print(df)
-
+    df = fetch_daily_summaries(propertyCode, AsOfDate)
+ 
     docs: List[Document] = []
     metadatas: List[Dict[str, Any]] = []
     ids: List[str] = []
-
+ 
     for _, row in df.iterrows():
         text = (
-            f"Daily Summary for {row['AsOfDate']} "
+            f"Daily Summary Snapshot date: {row['AsOfDate']} "
             f"(Dates: {row['Dates']}, {row['DayOfWeek']}, WeekType: {row['WeekType']})\n\n"
-            
+           
             f" Current Year:\n"
             f"- Inventory: {row['Inventory']}\n"
             f"- Rooms Sold: {row['RoomSold']}\n"
@@ -97,7 +119,7 @@ def daily_summaries_docs(property_code,as_of_date) -> Tuple[List[Document], List
             f"- Transient Rooms Sold: {row['TransientRoomSold']}, "
             f"Transient ADR: {row['TransientADR']}, "
             f"Transient Revenue: {row['TransientRevenue']}\n\n"
-            
+           
             f" Last Year (same date):\n"
             f"- Inventory: {row['LYTotalInventory']}\n"
             f"- Rooms Sold: {row['LYTotalRoomSold']}\n"
@@ -105,7 +127,7 @@ def daily_summaries_docs(property_code,as_of_date) -> Tuple[List[Document], List
             f"- ADR: {row['LYTotalADR']}\n"
             f"- Occupancy %: {row['LYTotalOccPerc']}\n"
             f"- RevPAR: {row['LYTotalRevPar']}\n\n"
-            
+           
             f" Last Year (same time pace):\n"
             f"- Inventory: {row['LYPaceInventory']}\n"
             f"- Rooms Sold: {row['LYPaceRoomSold']}\n"
@@ -114,14 +136,15 @@ def daily_summaries_docs(property_code,as_of_date) -> Tuple[List[Document], List
             f"- Occupancy %: {row['LYPaceOccPerc']}\n"
             f"- RevPAR: {row['LYPaceRevPar']}"
         )
-
+ 
         # Create Document
         docs.append(Document(page_content=text))
-
+ 
         # Metadata
         metadatas.append({
-            "AsOfDate": str(row["AsOfDate"]),
-            "Dates": str(row["Dates"]),
+            "propertyCode": propertyCode,
+            "AsOfDate": row["AsOfDate"].strftime("%Y-%m-%d"),
+            "Dates": row["Dates"].strftime("%Y-%m-%d"),
             "DayOfWeek": row["DayOfWeek"],
             "WeekType": row["WeekType"],
             "type": "daily_summary",
@@ -140,47 +163,55 @@ def daily_summaries_docs(property_code,as_of_date) -> Tuple[List[Document], List
             "LYPaceRevPar": row["LYPaceRevPar"],
             "LYPaceOccPerc": row["LYPaceOccPerc"],
         })
-
+ 
         # Unique ID
         ids.append(f"daily_summary_{row['Dates']}")
-
+ 
     return docs, metadatas, ids
-
-
-def ingest(property_code,as_of_date) -> int:
-    """Ingest all supported document types into Chroma."""
+ 
+# -----------------------------------------------------------------------------
+# Ingestion Pipeline
+# -----------------------------------------------------------------------------
+def ingest_daily_summaries(propertyCode, AsOfDate) -> None:
     try:
-        chroma = Chroma(persist_directory=PERSIST_DIR, embedding_function=embeddings)
-
+        import os
+ 
+        # Show where we're writing to
+        abs_dir = os.path.abspath(propertyCode)
+        print(f"[Chroma] persist_directory: {abs_dir}")
+ 
+        chroma = Chroma(
+            collection_name="daily_summaries",
+            persist_directory=propertyCode,       # this enables on-disk persistence
+            embedding_function=embeddings,
+        )
+ 
         # Daily summaries
-        docs, metadatas, ids = daily_summaries_docs(property_code,as_of_date)
-        if docs: 
-            # Precompute embeddings
-            texts = [doc.page_content for doc in docs if doc.page_content.strip()]
-            embeddings_list = embeddings.embed_documents(texts)
-
-            batch_size = 50
-            for i in range(0, len(texts), batch_size):
-                batch_texts = texts[i:i+batch_size]
-                batch_embs = embeddings_list[i:i+batch_size]
-                batch_metadatas = metadatas[i:i+batch_size] if metadatas else None
-                batch_ids = ids[i:i+batch_size] if ids else None
-                print(f"Adding batch {i}-{i+len(batch_texts)}")
-                chroma.add_texts(
-                    texts=batch_texts,
-                    metadatas=batch_metadatas,
-                    ids=batch_ids,
-                    embeddings=batch_embs  # pass precomputed embeddings
-                )
-
-        # TODO: Add other doc types (forecasts, FAQs, etc.)
-
-        chroma.persist()
-
+        docs, metadatas, ids = daily_summaries_docs(propertyCode, AsOfDate)
+        if docs:
+            texts = [doc.page_content for doc in docs]
+            print(f"[Ingest] Ingesting {len(texts)} docs...")
+            chroma.add_texts(texts=texts, metadatas=metadatas, ids=ids)
+        else:
+            print("[Ingest] No daily summaries found to ingest.")
+            return
+ 
+        try:
+            print("[Count] Docs in collection:", chroma._collection.count())
+        except Exception:
+            print("[Count] Could not read collection count.")
+           
     except Exception as e:
-        print(e)
-        return 0
-    finally:
-        print("Finally calll")
-        return len(docs)
-
+        logging.error("Error during ingestion: %s", e)
+        traceback.print_exc()
+ 
+ 
+# -----------------------------------------------------------------------------
+# Entry Point
+# -----------------------------------------------------------------------------
+if __name__ == "__main__":
+    propertyCode = "AC32AW"
+    AsOfDate = "2025-09-23"
+    ingest_daily_summaries(propertyCode, AsOfDate)
+ 
+ 
