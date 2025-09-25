@@ -8,3 +8,7 @@ sqlalchemy
 python-dotenv
 pandas
 tqdm
+langchain_openai
+langchain_chroma
+mysql-connector-python
+pymysql

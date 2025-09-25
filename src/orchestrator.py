@@ -1,4 +1,5 @@
-import daily_summary_agent
+# import daily_summary_agent
+from .agents import daily_summary_agent, performance_monitor_agent, annual_summary_agent
 import concurrent.futures
  
 def simple_route(query):
@@ -6,6 +7,10 @@ def simple_route(query):
     agents = []
     if any(x in q for x in ["revpar","adr","occupancy","daily"]):
         agents.append(daily_summary_agent)
+    if any(x in q for x in ["revpar","adr","occupancy","property score","performance"]):
+        agents.append(performance_monitor_agent)
+    if any(x in q for x in ["annual","yearly","year","forecast"]):
+        agents.append(annual_summary_agent)
     if not agents:
     # default to daily + forecast
         agents = [daily_summary_agent]
@@ -45,7 +50,6 @@ def handle_query(user_query: str, propertyCode: str, AsOfDate: str, **kwargs) ->
    
     user_query = user_query.strip()
  
- 
     agent_modules = simple_route(user_query)
     print(agent_modules)
     results = []
@@ -64,4 +68,3 @@ def handle_query(user_query: str, propertyCode: str, AsOfDate: str, **kwargs) ->
         aggregated["requires_review"] = True
  
     return aggregated
- 

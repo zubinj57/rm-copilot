@@ -33,11 +33,10 @@ JSON_SCHEMA_INSTRUCTION = (
     "suggested_actions (list of strings)."
 )
  
-def getchromabypropertyCode(propertyCode: str, collection_name: str = "default_collection") -> Chroma:
+def getChromaByPropertyCode(propertyCode: str, collection_name: str = "default_collection") -> Chroma:
     chroma = Chroma(
         collection_name=collection_name,
         persist_directory=propertyCode,
         embedding_function=emb,
     )
     return chroma
- 

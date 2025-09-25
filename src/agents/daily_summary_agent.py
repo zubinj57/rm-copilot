@@ -1,6 +1,6 @@
 # src/agents/daily_summary_agent.py
-from common import llm, SYSTEM_PREFIX, JSON_SCHEMA_INSTRUCTION, getchromabypropertyCode
-from db_utils import fetch_one
+from src.common import llm, SYSTEM_PREFIX, JSON_SCHEMA_INSTRUCTION, getChromaByPropertyCode
+from src.db_utils import fetch_one
 import json
 from langchain.schema import HumanMessage
 from datetime import datetime
@@ -54,9 +54,10 @@ def parse_staydate(text: str) -> str | None:
         if mo:
             return f"{int(y):04d}-{int(mo):02d}-{int(d):02d}"
     return None
+
 def agent_handle(user_question,propertyCode: str="", AsOfDate: str=""):
     print("Start agent script........")
-    chroma = getchromabypropertyCode(propertyCode,collection_name="daily_summaries")
+    chroma = getChromaByPropertyCode(propertyCode,collection_name="daily_summaries")
  
     flt = {"$and": [{"type": {"$eq": "daily_summary"}}]}
     if AsOfDate:
@@ -125,5 +126,3 @@ def agent_handle(user_question,propertyCode: str="", AsOfDate: str=""):
         }
  
     return parsed
- 
- 

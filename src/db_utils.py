@@ -2,7 +2,11 @@ import os
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
+
+
 load_dotenv()
+
+
 def get_pg_conn():
     return psycopg2.connect(
     host=os.getenv("PG_HOST"),
@@ -10,7 +14,7 @@ def get_pg_conn():
     user=os.getenv("PG_USER"),
     password=os.getenv("PG_PASS"),
     dbname=os.getenv("PG_DB"),
-    )
+)
 
 def fetch_one(query, params=None):
     conn = get_pg_conn()
@@ -19,7 +23,6 @@ def fetch_one(query, params=None):
         res = cur.fetchone()
     conn.close()
     return res
-
 
 def fetch_all(query, params=None):
     conn = get_pg_conn()
