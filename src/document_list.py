@@ -165,7 +165,7 @@ def reservation_docs(propertyCode, AsOfDate) -> Tuple[List[Document], List[Dict[
 def performance_monitor_docs(PROPERTY_ID="", PROPERTY_CODE="", AS_OF_DATE="", CLIENT_ID="",conn= None) -> Tuple[List[Document], List[Dict[str, Any]], List[str]]:
     """Convert daily summaries into Document objects, metadata, and IDs."""
 
-    response_json, error_list = get_PerformanceMonitor(PROPERTY_ID=PROPERTY_ID, PROPERTY_CODE=PROPERTY_CODE, AS_OF_DATE=AS_OF_DATE, CLIENT_ID=CLIENT_ID, conn=conn, year=year)
+    response_json, error_list = get_PerformanceMonitor(PROPERTY_ID=PROPERTY_ID, PROPERTY_CODE=PROPERTY_CODE, AS_OF_DATE=AS_OF_DATE, CLIENT_ID=CLIENT_ID, conn=conn)
 
     docs: List[Document] = []
     metadatas: List[Dict[str, Any]] = []
@@ -187,27 +187,12 @@ def performance_monitor_docs(PROPERTY_ID="", PROPERTY_CODE="", AS_OF_DATE="", CL
 
     return docs, metadatas, ids
 
-def annual_summary_docs(
-    PROPERTY_ID: str = "",
-    PROPERTY_CODE: str = "",
-    AS_OF_DATE: str = "",
-    CLIENT_ID: str = "",
-    year: str = "",
-    conn=None
-    
-) -> Tuple[List[Document], List[Dict[str, Any]], List[str]]:
+def annual_summary_docs(PROPERTY_ID="", PROPERTY_CODE="", AS_OF_DATE="", CLIENT_ID="",conn= None) -> Tuple[List[Document], List[Dict[str, Any]], List[str]]:
     """Convert annual summary data into Document objects, metadata, and IDs."""
     print('run annual_summary_docs')
-    response_json, error_list = get_AnnualSummary(
-        PROPERTY_ID=PROPERTY_ID,
-        PROPERTY_CODE=PROPERTY_CODE,
-        AS_OF_DATE=AS_OF_DATE,
-        CLIENT_ID=CLIENT_ID,
-        year=year,
-        conn=conn,
-        componentname="AnnualSummary"
-    )
-
+    response_json, error_list = get_AnnualSummary(PROPERTY_ID=PROPERTY_ID, PROPERTY_CODE=PROPERTY_CODE, AS_OF_DATE=AS_OF_DATE, CLIENT_ID=CLIENT_ID, conn=conn)
+    print("response_json ::", response_json)
+    
     docs: List[Document] = []
     metadatas: List[Dict[str, Any]] = []
     ids: List[str] = []
@@ -225,15 +210,17 @@ def annual_summary_docs(
                 "property_code": PROPERTY_CODE,
                 "as_of_date": AS_OF_DATE,
                 "client_id": CLIENT_ID,
-                "year": year,
                 **meta
             },
         )
         docs.append(doc)
         metadatas.append(doc.metadata)
         ids.append(uid)
-
+        print("DEBUG Annual Summary Params:", PROPERTY_CODE, AS_OF_DATE)
+        print("DEBUG Response JSON:", response_json)
+        print(docs)
     return docs, metadatas, ids
+    
 
 def traverse_json(obj, parent_key=""):
     """
@@ -250,3 +237,4 @@ def traverse_json(obj, parent_key=""):
     else:
         # leaf node → convert into text + metadata
         yield str(obj), {"path": parent_key}
+        

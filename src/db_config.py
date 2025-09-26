@@ -3,6 +3,11 @@ import os
 import mysql.connector
 from urllib.parse import urlparse
 import json
+from dotenv import load_dotenv
+
+# Load .env file into environment
+load_dotenv()
+
 
 def get_super_db_connection(PROPERTY_DATABASE, clientId):
 
@@ -50,12 +55,12 @@ def get_super_db_connection(PROPERTY_DATABASE, clientId):
 
 def get_db_connection(PROPERTY_DATABASE='', clientId=''):
     conn_str = get_super_db_connection(PROPERTY_DATABASE, clientId)
-    # print("Connection String:", str(conn_str))
+    if not conn_str:
+        raise ValueError(f"No configuration found for PROPERTY_DATABASE='{PROPERTY_DATABASE}' and clientId='{clientId}'")
 
     if PROPERTY_DATABASE == "" or PROPERTY_DATABASE is None:
         ConfigurationDb = conn_str['configuration_db']
-        ConfigurationDbComponents = dict(item.strip().split('=') for item in ConfigurationDb.split(';'))  # ✅ FIXED HERE
-
+        ConfigurationDbComponents = dict(item.strip().split('=') for item in ConfigurationDb.split(';'))  
         # print("Configuration DB Components:", ConfigurationDbComponents)
 
         host = ConfigurationDbComponents.get('server')

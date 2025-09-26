@@ -52,7 +52,7 @@ def parse_staydate(text: str) -> str | None:
 
 def agent_handle(user_question,propertyCode: str="", AsOfDate: str=""):
     print("Start agent script........")
-    chroma = getchromabypropertyCode(propertyCode,collection_name="performance_monitor")
+    chroma = getChromaByPropertyCode(propertyCode,collection_name="performance_monitor")
  
     flt = {"$and": [{"type": {"$eq": "performance_monitor"}}]}
     if AsOfDate:

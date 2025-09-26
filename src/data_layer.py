@@ -1,6 +1,6 @@
 import pandas as pd
 from sqlalchemy import create_engine
-
+from src.db_utils import fetch_all
 import traceback
 from sqlalchemy import text
 from datetime import datetime, date
@@ -10,6 +10,7 @@ def fetch_data(conn, query, params=None):
     """Fetch data using a cursor, format results, and return them as a list of dictionaries."""
     formatted_results = []
     result = conn.execute(text(query), params or {})
+    print("result:-----------------------------------")
     print(result)
 
     columns = result.keys()  # Get column names
@@ -2763,93 +2764,80 @@ def get_PerformanceMonitor(PROPERTY_ID, PROPERTY_CODE, AS_OF_DATE, CLIENT_ID, co
         error_list.append(f"{err_msg}\nTraceback:\n{traceback_info}")
         return None, error_list
 
-def get_AnnualSummary(PROPERTY_ID, PROPERTY_CODE, AS_OF_DATE, CLIENT_ID, year, conn, componentname):
-        try:
-            error_list = []
-            response_json = None
-            total_ly_query = """
-                SELECT 
-                    "propertyCode",
-                    "AsOfDate"::text AS "AsOfDate", 
-                    "year",
-                    "month",
-                    "occ",
-                    "rms",
-                    "adr",
-                    "rev"
-                FROM snp_annsmry_total_ly 
-                WHERE "AsOfDate" = :as_of_date
-                AND "propertyCode" = :property_code;
-                                        """
-            print(total_ly_query)
+def get_AnnualSummary(PROPERTY_ID, PROPERTY_CODE, AS_OF_DATE, CLIENT_ID, conn):
+    try:
+        error_list = []
+        response_json = None
 
-            params = {"as_of_date": AS_OF_DATE, "property_code": PROPERTY_CODE}
-            if year:
-                total_ly_query += " AND \"year\" = :year"
-                params["year"] = year
+        total_ly_query = f"""
+           select
+              "propertyCode",
+              "AsOfDate"::text as "AsOfDate",
+              "year",
+              "month",
+              "occ",
+              "rms",
+              "adr",
+              "rev"
+            from
+              snp_annsmry_total_ly
+            where
+              "AsOfDate"::date = '{AS_OF_DATE}'
+              and "propertyCode" = '{PROPERTY_CODE}';
+        """
+        total_ly_result = conn.execute(text(total_ly_query))
+        total_ly_json = total_ly_result.fetchall()
+        # total_ly_json = fetch_data(conn, total_ly_query)
 
-            total_ly_json = fetch_data(conn, total_ly_query, {
-                "as_of_date": AS_OF_DATE,
-                "property_code": PROPERTY_CODE,
-                "year": year
-            })
-            print(total_ly_json)
+        otb_query = f"""
+            SELECT 
+                "propertyCode",
+                "AsOfDate"::text AS "AsOfDate",
+                "year",
+                "month",
+                "occ",
+                "rms",
+                "adr",
+                "rev"
+            FROM snp_annsmry_on_the_book
+            WHERE 
+             "AsOfDate"::date = '{AS_OF_DATE}'
+              and "propertyCode" = '{PROPERTY_CODE}';
+        """
 
-            otb_query = """
-                SELECT 
-                    "propertyCode",
-                    "AsOfDate"::text AS "AsOfDate",
-                    "year",
-                    "month",
-                    "occ",
-                    "rms",
-                    "adr",
-                    "rev"
-                FROM snp_annsmry_on_the_book
-                WHERE "AsOfDate" = :as_of_date
-                AND "propertyCode" = :property_code
-                AND "year" = :year;
-            """
+        # otb_json = fetch_all(otb_query, (AS_OF_DATE, PROPERTY_CODE, year))
+        otb_result = conn.execute(text(otb_query))
+        otb_json = otb_result.fetchall()
 
-            otb_json = fetch_data(conn, otb_query, {
-                "as_of_date": AS_OF_DATE,
-                "property_code": PROPERTY_CODE,
-                "year": year
-            })
+        net_stly_query = f"""
+            SELECT 
+                "propertyCode",
+                "AsOfDate"::text AS "AsOfDate",
+                "year",
+                "month",
+                "occ",
+                "rms",
+                "adr",
+                "rev"
+            FROM snp_annsmry_net_stly
+            WHERE
+             "AsOfDate"::date = '{AS_OF_DATE}'
+              and "propertyCode" = '{PROPERTY_CODE}';
+        """
 
-            net_stly_query = """
-                SELECT 
-                    "propertyCode",
-                    "AsOfDate"::text AS "AsOfDate",
-                    "year",
-                    "month",
-                    "occ",
-                    "rms",
-                    "adr",
-                    "rev"
-                FROM snp_annsmry_net_stly
-                WHERE "AsOfDate" = :as_of_date
-                AND "propertyCode" = :property_code
-                AND "year" = :year;
-            """
 
-            net_stly_json = fetch_data(conn, net_stly_query, {
-                "as_of_date": AS_OF_DATE,
-                "property_code": PROPERTY_CODE,
-                "year": year
-            })
+        net_stly_result = conn.execute(text(net_stly_query))
+        net_stly_json = net_stly_result.fetchall()
 
-            response_json = {
-                "otb_current": otb_json,
-                "net_stly": net_stly_json,
-                "total_ly": total_ly_json
-            }
-            print(response_json)
-            
-            return response_json, error_list
+        response_json = {
+            "otb_current": otb_json,
+            "net_stly": net_stly_json,
+            "total_ly": total_ly_json
+        }
 
-        except Exception as e:
-            err_msg = f"Error fetching {componentname} data: {str(e)}"
-            error_list.append(err_msg)
-            return None, error_list 
- 
+        return response_json, error_list
+
+    except Exception as e:
+        err_msg = f"Error fetching AnnualSummary data: {str(e)}"
+        error_list.append(err_msg)
+        return None, error_list

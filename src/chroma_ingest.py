@@ -96,13 +96,16 @@ def ingest_performance_monitor(PROPERTY_ID="", PROPERTY_CODE="", AS_OF_DATE="", 
         traceback.print_exc()
         return 0
 
-def ingest_annual_summary(PROPERTY_ID="", PROPERTY_CODE="", AS_OF_DATE="", CLIENT_ID="", year="", conn=None) -> None:
+def ingest_annual_summary(PROPERTY_ID="", PROPERTY_CODE="", AS_OF_DATE="", CLIENT_ID="",conn= None) -> None:
     try:
         chroma = getChromaByPropertyCode(PROPERTY_CODE, collection_name="annual_summary")
 
         # Annual summary docs
-        docs, metadatas, ids = annual_summary_docs(PROPERTY_ID=PROPERTY_ID, PROPERTY_CODE=PROPERTY_CODE, AS_OF_DATE=AS_OF_DATE, CLIENT_ID=CLIENT_ID, conn=conn, year=year)
+        docs, metadatas, ids = annual_summary_docs(PROPERTY_ID=PROPERTY_ID, PROPERTY_CODE=PROPERTY_CODE, AS_OF_DATE=AS_OF_DATE, CLIENT_ID=CLIENT_ID, conn=conn)
 
+        print("DEBUG annual_summary_docs output count:", len(docs))
+        print("DEBUG first doc sample:", docs[0].page_content if docs else "No docs")
+        
         if docs:
             texts = [doc.page_content for doc in docs]
             print(f"[Ingest] Ingesting {len(texts)} annual summary docs...")
