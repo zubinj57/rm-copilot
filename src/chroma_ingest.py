@@ -120,3 +120,4 @@ def ingest_annual_summary(PROPERTY_ID="", PROPERTY_CODE="", AS_OF_DATE="", CLIEN
         logging.error("Error during annual summary ingestion: %s", e)
         traceback.print_exc()
         return 0
+    

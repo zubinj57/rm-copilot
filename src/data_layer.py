@@ -7,23 +7,21 @@ from datetime import datetime, date
 from decimal import Decimal 
 
 def fetch_data(conn, query, params=None):
-    """Fetch data using a cursor, format results, and return them as a list of dictionaries."""
-    formatted_results = []
-    result = conn.execute(text(query), params or {})
-    print("result:-----------------------------------")
-    print(result)
+  """Fetch data using a cursor, format results, and return them as a list of dictionaries."""
+  formatted_results = []
+  result = conn.execute(text(query), params or {})
 
-    columns = result.keys()  # Get column names
-    for row in result.fetchall():
-        row_dict = dict(zip(columns, row))
-        for key, value in row_dict.items():
-            if isinstance(value, (datetime, date)):  
-                row_dict[key] = value.strftime("%Y-%m-%d")
-            elif isinstance(value, Decimal):  
-                row_dict[key] = float(value)
-        formatted_results.append(row_dict)
-    
-    return formatted_results
+  columns = result.keys()  # Get column names
+  for row in result.fetchall():
+      row_dict = dict(zip(columns, row))
+      for key, value in row_dict.items():
+          if isinstance(value, (datetime, date)):  
+              row_dict[key] = value.strftime("%Y-%m-%d")
+          elif isinstance(value, Decimal):  
+              row_dict[key] = float(value)
+      formatted_results.append(row_dict)
+
+  return formatted_results
    
 # -----------------------------------------------------------------------------
 # Data Fetching
@@ -2765,79 +2763,118 @@ def get_PerformanceMonitor(PROPERTY_ID, PROPERTY_CODE, AS_OF_DATE, CLIENT_ID, co
         return None, error_list
 
 def get_AnnualSummary(PROPERTY_ID, PROPERTY_CODE, AS_OF_DATE, CLIENT_ID, conn):
-    try:
-        error_list = []
-        response_json = None
-
-        total_ly_query = f"""
-           select
+  try:
+      error_list = []
+      total_ly_query = """
+          SELECT 
               "propertyCode",
-              "AsOfDate"::text as "AsOfDate",
+              "AsOfDate"::text AS "AsOfDate", 
               "year",
               "month",
-              "occ",
-              "rms",
-              "adr",
-              "rev"
-            from
-              snp_annsmry_total_ly
-            where
-              "AsOfDate"::date = '{AS_OF_DATE}'
-              and "propertyCode" = '{PROPERTY_CODE}';
-        """
-        total_ly_result = conn.execute(text(total_ly_query))
-        total_ly_json = total_ly_result.fetchall()
-        # total_ly_json = fetch_data(conn, total_ly_query)
+              "occ" as "total_ly_occ",
+              "rms" as "total_ly_rms",
+              "adr" as "total_ly_adr",
+              "rev" as "total_ly_rev"
+          FROM snp_annsmry_total_ly 
+          WHERE "AsOfDate" = :as_of_date
+          AND "propertyCode" = :property_code 
+      """
 
-        otb_query = f"""
-            SELECT 
-                "propertyCode",
-                "AsOfDate"::text AS "AsOfDate",
-                "year",
-                "month",
-                "occ",
-                "rms",
-                "adr",
-                "rev"
-            FROM snp_annsmry_on_the_book
-            WHERE 
-             "AsOfDate"::date = '{AS_OF_DATE}'
-              and "propertyCode" = '{PROPERTY_CODE}';
-        """
+      total_ly_json = fetch_data(conn, total_ly_query, {
+          "as_of_date": AS_OF_DATE,
+          "property_code": PROPERTY_CODE
+      })
+      print(total_ly_json[0])
+      otb_query = """
+          SELECT 
+              "propertyCode",
+              "AsOfDate"::text AS "AsOfDate",
+              "year",
+              "month",
+              "occ" as "current_occ",
+              "rms" as "current_rms",
+              "adr" as "current_adr",
+              "rev" as "current_rev"
+          FROM snp_annsmry_on_the_book
+          WHERE "AsOfDate" = :as_of_date
+          AND "propertyCode" = :property_code
+      """
 
-        # otb_json = fetch_all(otb_query, (AS_OF_DATE, PROPERTY_CODE, year))
-        otb_result = conn.execute(text(otb_query))
-        otb_json = otb_result.fetchall()
+      otb_json = fetch_data(conn, otb_query, {
+          "as_of_date": AS_OF_DATE,
+          "property_code": PROPERTY_CODE
+      })
 
-        net_stly_query = f"""
-            SELECT 
-                "propertyCode",
-                "AsOfDate"::text AS "AsOfDate",
-                "year",
-                "month",
-                "occ",
-                "rms",
-                "adr",
-                "rev"
-            FROM snp_annsmry_net_stly
-            WHERE
-             "AsOfDate"::date = '{AS_OF_DATE}'
-              and "propertyCode" = '{PROPERTY_CODE}';
-        """
+      net_stly_query = """
+          SELECT 
+              "propertyCode",
+              "AsOfDate"::text AS "AsOfDate",
+              "year",
+              "month",
+              "occ" as "stly_occ",
+              "rms" as "stly_rms",
+              "adr" as "stly_adr",
+              "rev" as "stly_rev"
+          FROM snp_annsmry_net_stly
+          WHERE "AsOfDate" = :as_of_date
+          AND "propertyCode" = :property_code
+      """
 
+      net_stly_json = fetch_data(conn, net_stly_query, {
+          "as_of_date": AS_OF_DATE,
+          "property_code": PROPERTY_CODE
+      })
 
-        net_stly_result = conn.execute(text(net_stly_query))
-        net_stly_json = net_stly_result.fetchall()
+      def build_annual_summary_df(total_ly_json, otb_json, net_stly_json) -> pd.DataFrame:
+        """Combine the three annual summary JSONs into one DataFrame."""
 
-        response_json = {
-            "otb_current": otb_json,
-            "net_stly": net_stly_json,
-            "total_ly": total_ly_json
-        }
+        # ---- JSON → DF (wide)
+        df_total = pd.DataFrame(total_ly_json) if total_ly_json else pd.DataFrame()
+        df_otb   = pd.DataFrame(otb_json) if otb_json else pd.DataFrame()
+        df_net   = pd.DataFrame(net_stly_json) if net_stly_json else pd.DataFrame()
 
-        return response_json, error_list
+        # Ensure join keys exist
+        key_cols = ["propertyCode", "AsOfDate", "year", "month"]
+        for d in (df_total, df_otb, df_net):
+            for k in key_cols:
+                if k not in d.columns:
+                    d[k] = pd.NA
 
-    except Exception as e:
-        err_msg = f"Error fetching AnnualSummary data: {str(e)}"
-        error_list.append(err_msg)
-        return None, error_list
+        df = (
+            df_otb.merge(df_total, on=key_cols, how="outer")
+                  .merge(df_net,   on=key_cols, how="outer")
+        )
+
+        ordered_cols = [
+            "propertyCode", "AsOfDate", "year", "month",
+            "current_occ", "current_rms", "current_adr", "current_rev",
+            "total_ly_occ", "total_ly_rms", "total_ly_adr", "total_ly_rev",
+            "stly_occ", "stly_rms", "stly_adr", "stly_rev",
+        ]
+        # Use reindex to guarantee a DataFrame (not a Series) and stable order
+        df = df.reindex(columns=ordered_cols)
+
+        df["year"] = pd.to_numeric(df["year"], errors="coerce").astype("Int64")
+
+        return df
+      
+      ann_smry_df = build_annual_summary_df(total_ly_json, otb_json, net_stly_json)
+      return ann_smry_df, error_list
+
+      # response_json = {
+      #     "otb_current": otb_json,
+      #     "net_stly": net_stly_json,
+      #     "total_ly": total_ly_json
+      # }
+
+      
+      # if response_json:
+      #     print("First row of otb_current:", response_json["otb_current"][0] if response_json["otb_current"] else None)
+      #     print("First row of net_stly:", response_json["net_stly"][0] if response_json["net_stly"] else None)
+      #     print("First row of total_ly:", response_json["total_ly"][0] if response_json["total_ly"] else None)
+      # return response_json, error_list
+
+  except Exception as e:
+      err_msg = f"Error fetching Annual Summary data: {str(e)}"
+      error_list.append(err_msg)
+      return None, error_list 

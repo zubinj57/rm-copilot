@@ -50,11 +50,6 @@ async def ingest_endpoint(
         else:
             raise HTTPException(status_code=400, detail="Invalid type provided.")
 
-        
-        if inserted_count < 0:
-            raise HTTPException(status_code=500, detail=f"Ingestion failed for {type}")
-
-       # ❌ Fail if no documents inserted or negative count
         if inserted_count <= 0:
             raise HTTPException(
                 status_code=500,
@@ -71,7 +66,7 @@ async def ingest_endpoint(
         return {"status": "fail", "msg": str(e)}
         
 
-@app.get("/")
+@app.get("/zubin")
 async def welcom_rm():
 
     return {"msg": "Welcome to the RM Copilot."}
