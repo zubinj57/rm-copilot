@@ -15,10 +15,11 @@ class QueryRequest(BaseModel):
 
 
 @app.get("/query")
-async def query_endpoint():
-    propertyCode = "CHIZI"
-    AsOfDate = "2025-09-24"
-    q = f"""Compare OTB vs STLY for 2025 annual summary."""
+async def query_endpoint(
+    propertyCode: str = Query(..., description="Hotel property code"),
+    AsOfDate: str = Query(..., description="As Of Date (YYYY-MM-DD)"),
+    q: str = Query(..., description="Query to execute")
+):
     result = handle_query(q, propertyCode, AsOfDate)
     return result
 
@@ -38,14 +39,14 @@ async def ingest_endpoint(
     Returns the number of documents ingested.
     """
     inserted_count = 0
-    config_db_conn = get_db_connection(PROPERTY_DATABASE='', clientId=CLIENT_ID)
+    config_db_conn = get_db_connection(PROPERTY_DATABASE=PROPERTY_CODE, clientId=CLIENT_ID)
     try:
         if type == "performance_monitor":
             inserted_count = ingest_performance_monitor(PROPERTY_ID=PROPERTY_ID, PROPERTY_CODE=PROPERTY_CODE, AS_OF_DATE=AS_OF_DATE, CLIENT_ID=CLIENT_ID, conn=config_db_conn)
         elif type == "annual_summary":
             if not year:
                 year = str(pd.to_datetime(AS_OF_DATE).year)
-            inserted_count = ingest_annual_summary(PROPERTY_ID=PROPERTY_ID, PROPERTY_CODE=PROPERTY_CODE, AS_OF_DATE=AS_OF_DATE, CLIENT_ID=CLIENT_ID, conn=config_db_conn, year=year)
+            inserted_count = ingest_annual_summary(PROPERTY_ID=PROPERTY_ID, PROPERTY_CODE=PROPERTY_CODE, AS_OF_DATE=AS_OF_DATE, CLIENT_ID=CLIENT_ID, conn=config_db_conn)
         else:
             raise HTTPException(status_code=400, detail="Invalid type provided.")
 

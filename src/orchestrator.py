@@ -9,7 +9,7 @@ def simple_route(query):
         agents.append(daily_summary_agent)
     if any(x in q for x in ["revpar","adr","occupancy","property score","performance"]):
         agents.append(performance_monitor_agent)
-    if any(x in q for x in ["annual","yearly","year","forecast"]):
+    if any(x in q for x in ["annual","yearly","year","forecast","trend","kpi","performance","OTB","STLY"]):
         agents.append(annual_summary_agent)
     if not agents:
     # default to daily + forecast
