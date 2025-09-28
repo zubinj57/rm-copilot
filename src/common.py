@@ -49,11 +49,11 @@ def getChromaByPropertyCode(propertyCode: str, collection_name: str = "default_c
 # -----------------------------------------------------------------------------
 # Defining Cutoff Date for Deletion and Ingestion
 # -----------------------------------------------------------------------------
-def cutoff_ts(as_of_date: str, days: int = 7) -> Tuple[datetime, int]:
+def cutoff_ts(as_of_date: str, days: int = 7) -> Tuple[int, datetime, int]:
     """Return UNIX timestamp (UTC) for (as_of_date - days)."""
     asof_dt = datetime.strptime(as_of_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
     cutoff_dt = asof_dt - timedelta(days=days)
-    return int(asof_dt.timestamp()),cutoff_dt, int(cutoff_dt.timestamp())
+    return int(asof_dt.timestamp()), cutoff_dt, int(cutoff_dt.timestamp())
 
 
 
