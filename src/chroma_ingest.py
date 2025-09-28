@@ -117,7 +117,7 @@ def ingest_annual_summary(collection_name: str,
                 conn=conn
             )
         )
-        return chroma._collection.count()
+        return int(chroma._collection.count())
         
     except Exception as e:
         logger.error("Error during annual summary ingestion: %s", e)

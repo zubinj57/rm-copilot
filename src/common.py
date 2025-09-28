@@ -55,8 +55,6 @@ def cutoff_ts(as_of_date: str, days: int = 7) -> Tuple[int, datetime, int]:
     cutoff_dt = asof_dt - timedelta(days=days)
     return int(asof_dt.timestamp()), cutoff_dt, int(cutoff_dt.timestamp())
 
-
-
 # -----------------------------------------------------------------------------
 # Deletion Function
 # -----------------------------------------------------------------------------
@@ -80,11 +78,12 @@ def delete_vectors(propertyCode: str, AsOfDate: str, chroma: Chroma ) -> None:
         if victims:
             logger.info(f"Found {len(victims)} documents to delete")
             collection.delete(ids=victims)
+            logger.info(f"Deleted documents older than {cutoff_date} from collection {collection.name}")
+            logger.info(f"Documents in collection after deletion: {collection.count()}")
         else:
             logger.info("No documents to delete")
 
-        logger.info(f"Deleted documents older than {cutoff_date} from collection {collection.name}")
-        logger.info(f"Documents in collection after deletion: {collection.count()}")
+        
 
         logger.info(f"Deleting Same day documents for {AsOfDate} from collection {collection.name}")
         res_same_day = collection.get(

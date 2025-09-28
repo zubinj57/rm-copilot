@@ -1,78 +1,93 @@
 # src/app.py
 from fastapi import FastAPI, HTTPException, Query
+from typing import Dict, Any, Literal, Optional
 from pydantic import BaseModel
-from typing import Dict, Any
-import pandas as pd
-from src.orchestrator import handle_query
-import src.chroma_ingest 
+import src.chroma_ingest as chroma_ingest
 from src.db_config import get_db_connection
+import sys
+import os
+
+from src.orchestrator import handle_query
+
+# Add the parent directory to sys.path to allow importing utils
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils.logger import get_custom_logger
+
+logger = get_custom_logger(name="app_logger") 
+
 app = FastAPI()
 
+AllowedIngestType = Literal["daily_summary", "reservation", "performance_monitor", "annual_summary"]
 
 class QueryRequest(BaseModel):
     query: str
     params: Dict[str, Any] = {}
 
-
 @app.get("/query")
 async def query_endpoint(
-    propertyCode: str = Query(..., description="Hotel property code"),
-    AsOfDate: str = Query(..., description="As Of Date (YYYY-MM-DD)"),
-    q: str = Query(..., description="Query to execute")
+    property_code: str = Query(..., description="Hotel property code"),
+    as_of_date: str = Query(..., description="As Of Date (YYYY-MM-DD)"),
+    q: str = Query(..., description="Query to execute"),
 ):
-    result = handle_query(q, propertyCode, AsOfDate)
-    return result
-
+    # If handle_query is sync, calling it directly from async is fine.
+    
+    return handle_query(q, property_code, as_of_date)
 
 @app.get("/ingest")
 async def ingest_endpoint(
-    type: str = Query(..., regex="^(daily_summary|reservation|performance_monitor|annual_summary)$"),
-    PROPERTY_CODE: str = Query(),
-    AS_OF_DATE: str = Query(),
-    PROPERTY_ID: str = Query(),
-    CLIENT_ID: str = Query(),
-    year: str = Query(None),
+    type: AllowedIngestType = Query(..., description="Ingest type"),
+    property_code: str = Query(...),
+    as_of_date: str = Query(..., pattern=r"^\d{4}-\d{2}-\d{2}$"),  # pattern instead of regex
+    property_id: str = Query(...),
+    client_id: str = Query(...),
+    year: Optional[str] = Query(None),
 ):
     """
     Trigger ingestion of data into Chroma vector DB.
-    Supports ingestion of daily summaries or reservations.
     Returns the number of documents ingested.
     """
-    inserted_count = 0
-    config_db_conn = get_db_connection(PROPERTY_DATABASE=PROPERTY_CODE, clientId=CLIENT_ID)
+    logger.info(f"Received ingestion request: type={type}, property_code={property_code}, as_of_date={as_of_date}, property_id={property_id}, client_id={client_id}, year={year}")
+    conn = None
     try:
-        ingest_fn = getattr(src.chroma_ingest, f"ingest_{type}", None)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Ingestion function for type '{type}' not found.")
-    
-    try:
-        inserted_count = ingest_fn(collection_name=type,
-                                   PROPERTY_ID=PROPERTY_ID,
-                                   PROPERTY_CODE=PROPERTY_CODE,
-                                    AS_OF_DATE=AS_OF_DATE,
-                                    CLIENT_ID=CLIENT_ID,
-                                    conn=config_db_conn)
+        conn = get_db_connection(PROPERTY_DATABASE=property_code, clientId=client_id)
 
-        if inserted_count <= 0:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Ingestion failed for {type}. Inserted count: {inserted_count}"
-            )
+        # Safe dynamic dispatch
+        ingest_fn = getattr(chroma_ingest, f"ingest_{type}", None)
+        if not callable(ingest_fn):
+            raise HTTPException(status_code=400, detail=f"Ingestion function for type '{type}' not found.")
 
+        inserted_count = ingest_fn(
+            collection_name=type,
+            PROPERTY_ID=property_id,
+            PROPERTY_CODE=property_code,
+            AS_OF_DATE=as_of_date,
+            CLIENT_ID=client_id,
+            conn=conn,
+        )
+
+        # Prefer success + count, don’t misuse 500s for “no data”
         return {
             "status": "success",
             "type": type,
-            "documents_ingested": inserted_count
+            "property_code": property_code,
+            "as_of_date": as_of_date,
+            "documents_ingested": int(inserted_count or 0),
         }
 
+    except HTTPException:
+        # re-raise FastAPI HTTP errors
+        raise
     except Exception as e:
-        return {"status": "fail", "msg": str(e)}
-        
+        # unexpected server-side problem
+        raise HTTPException(status_code=500, detail=f"Ingestion failed: {e}")
+    finally:
+        # ensure connection is closed
+        try:
+            if conn is not None:
+                conn.close()
+        except Exception:
+            pass
 
 @app.get("/zubin")
-async def welcom_rm():
-
+async def welcome_rm():
     return {"msg": "Welcome to the RM Copilot."}
-
-# Run the server with:
-# uvicorn app:app --reload --port 8000
