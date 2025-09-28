@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from typing import Dict, Any
 import pandas as pd
 from src.orchestrator import handle_query
-from src.chroma_ingest import (ingest_daily_summaries, ingest_reservation, ingest_performance_monitor, ingest_annual_summary,)
+import src.chroma_ingest 
 from src.db_config import get_db_connection
 app = FastAPI()
 
@@ -41,14 +41,17 @@ async def ingest_endpoint(
     inserted_count = 0
     config_db_conn = get_db_connection(PROPERTY_DATABASE=PROPERTY_CODE, clientId=CLIENT_ID)
     try:
-        if type == "performance_monitor":
-            inserted_count = ingest_performance_monitor(PROPERTY_ID=PROPERTY_ID, PROPERTY_CODE=PROPERTY_CODE, AS_OF_DATE=AS_OF_DATE, CLIENT_ID=CLIENT_ID, conn=config_db_conn)
-        elif type == "annual_summary":
-            if not year:
-                year = str(pd.to_datetime(AS_OF_DATE).year)
-            inserted_count = ingest_annual_summary(PROPERTY_ID=PROPERTY_ID, PROPERTY_CODE=PROPERTY_CODE, AS_OF_DATE=AS_OF_DATE, CLIENT_ID=CLIENT_ID, conn=config_db_conn)
-        else:
-            raise HTTPException(status_code=400, detail="Invalid type provided.")
+        ingest_fn = getattr(src.chroma_ingest, f"ingest_{type}", None)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Ingestion function for type '{type}' not found.")
+    
+    try:
+        inserted_count = ingest_fn(collection_name=type,
+                                   PROPERTY_ID=PROPERTY_ID,
+                                   PROPERTY_CODE=PROPERTY_CODE,
+                                    AS_OF_DATE=AS_OF_DATE,
+                                    CLIENT_ID=CLIENT_ID,
+                                    conn=config_db_conn)
 
         if inserted_count <= 0:
             raise HTTPException(

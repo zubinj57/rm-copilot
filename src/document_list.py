@@ -1,10 +1,12 @@
 from typing import List, Tuple, Dict, Any
 from langchain.schema import Document
-from .data_layer import fetch_daily_summaries, fetch_reservation, get_PerformanceMonitor, get_AnnualSummary
+from .data_layer import fetch_daily_summaries, fetch_reservation, get_PerformanceMonitor, get_annual_summary
+from utils.month_normalizer import normalize_month_str, month_num_for_sort
 import uuid
 import pandas as pd
 import calendar
 import re
+from datetime import datetime, timezone
 
 
 # -----------------------------------------------------------------------------
@@ -12,36 +14,6 @@ import re
 # -----------------------------------------------------------------------------
 
 
-# helper: normalize month strings and provide a numeric key for sorting (if needed)
-_MONTH_ALIASES = {
-    "jan":"January","january":"January",
-    "feb":"February","february":"February",
-    "mar":"March","march":"March",
-    "apr":"April","april":"April",
-    "may":"May",
-    "jun":"June","june":"June",
-    "jul":"July","july":"July",
-    "aug":"August","august":"August",
-    "sep":"September","sept":"September","september":"September",
-    "oct":"October","october":"October",
-    "nov":"November","november":"November",
-    "dec":"December","december":"December",
-}
-_MONTH_TO_NUM = {m:i for i,m in enumerate(
-    ["January","February","March","April","May","June","July","August","September","October","November","December"],
-    start=1
-)}
-
-def normalize_month_str(m) -> str:
-    if m is None or (isinstance(m, float) and pd.isna(m)):
-        return "Unknown"
-    s = str(m).strip()
-    key = re.sub(r"[^A-Za-z]", "", s).lower()  # keep letters only
-    return _MONTH_ALIASES.get(key, s.title())  # best-effort: title-case fallback
-
-def month_num_for_sort(m_str: str) -> int | None:
-    m_norm = normalize_month_str(m_str)
-    return _MONTH_TO_NUM.get(m_norm)  # None if Unknown/invalid
 
 def daily_summaries_docs(propertyCode, AsOfDate) -> Tuple[List[Document], List[Dict[str, Any]], List[str]]:
     """Convert daily summaries into Document objects, metadata, and IDs."""
@@ -224,79 +196,105 @@ def performance_monitor_docs(PROPERTY_ID="", PROPERTY_CODE="", AS_OF_DATE="", CL
 
     return docs, metadatas, ids
 
-def annual_summary_docs(
+def docs_annual_summary(
     PROPERTY_ID: str,
     PROPERTY_CODE: str,
     AS_OF_DATE: str,
     CLIENT_ID: str,
     conn
 ):
-    df, errs = get_AnnualSummary(PROPERTY_ID, PROPERTY_CODE, AS_OF_DATE, CLIENT_ID, conn)
+    df, errs = get_annual_summary(PROPERTY_ID, PROPERTY_CODE, AS_OF_DATE, CLIENT_ID, conn)
     if errs or df is None or df.empty:
         return [], [], []
 
-    # DO NOT coerce month to int; keep it as string
-    # Optional: sort nicely by year then calendar month
     df = df.copy()
-    if "year" in df:
+
+    # Ensure numeric year if present
+    if "year" in df.columns:
         df["year"] = pd.to_numeric(df["year"], errors="coerce").astype("Int64")
+
+    # Normalize month & sorting key (uses your month_normalizer module)
     df["month_norm"] = df["month"].apply(normalize_month_str)
     df["month_sort"] = df["month_norm"].apply(month_num_for_sort)
+
+    # Optional: sanitize numeric columns (robust to dirty inputs)
+    num_cols = [
+        "current_occ","current_rms","current_adr","current_rev",
+        "stly_occ","stly_rms","stly_adr","stly_rev",
+        "total_ly_occ","total_ly_rms","total_ly_adr","total_ly_rev",
+    ]
+    for c in num_cols:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    # Sort: year -> month number -> month name (for ties), Unknown last
     df = df.sort_values(by=["year", "month_sort", "month_norm"], na_position="last")
+
+    def fmt(x, pct=False):
+        if pd.isna(x): return "NA"
+        try:
+            return f"{float(x):.2f}%" if pct else f"{float(x):.2f}"
+        except Exception:
+            return str(x)
 
     docs, metadatas, ids = [], [], []
     seen_ids = set()
+    as_of_ts = int(datetime.strptime(AS_OF_DATE, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp())
 
-    for _, row in df.iterrows():
-        y = int(row["year"]) if pd.notna(row["year"]) else None
-        m_str = normalize_month_str(row.get("month"))
-        # Build readable text
+    # Faster loop for large dataframes
+    for row in df.itertuples(index=False):
+        # Access via attribute names
+        y = int(row.year) if getattr(row, "year", None) is not None and pd.notna(row.year) else None
+        m_str = getattr(row, "month_norm", "Unknown")
+
         text = (
             f"Annual Summary Snapshot AsOfDate: {AS_OF_DATE} (Year: {y}, Month: {m_str})\n\n"
-            f" Current (On-the-Books):\n"
-            f"- Occupancy %: {row.get('current_occ')}\n"
-            f"- Rooms Sold: {row.get('current_rms')}\n"
-            f"- ADR: {row.get('current_adr')}\n"
-            f"- Total Revenue: {row.get('current_rev')}\n\n"
-            f" Same-Time Last Year (STLY):\n"
-            f"- Occupancy %: {row.get('stly_occ')}\n"
-            f"- Rooms Sold: {row.get('stly_rms')}\n"
-            f"- ADR: {row.get('stly_adr')}\n"
-            f"- Total Revenue: {row.get('stly_rev')}\n\n"
-            f" Last Year (Final, Calendar-aligned):\n"
-            f"- Occupancy %: {row.get('total_ly_occ')}\n"
-            f"- Rooms Sold: {row.get('total_ly_rms')}\n"
-            f"- ADR: {row.get('total_ly_adr')}\n"
-            f"- Total Revenue: {row.get('total_ly_rev')}\n"
+            f"- Current Occupancy %: {fmt(getattr(row, 'current_occ', None), pct=True)}\n"
+            f"- Current Rooms Sold: {fmt(getattr(row, 'current_rms', None))}\n"
+            f"- Current ADR: {fmt(getattr(row, 'current_adr', None))}\n"
+            f"- Current Total Revenue: {fmt(getattr(row, 'current_rev', None))}\n\n"
+            f"- Same Time Last Year (STLY) Occupancy %: {fmt(getattr(row, 'stly_occ', None), pct=True)}\n"
+            f"- Same Time Last Year (STLY) Rooms Sold: {fmt(getattr(row, 'stly_rms', None))}\n"
+            f"- Same Time Last Year (STLY) ADR: {fmt(getattr(row, 'stly_adr', None))}\n"
+            f"- Same Time Last Year (STLY) Total Revenue: {fmt(getattr(row, 'stly_rev', None))}\n\n"
+            f"- Last Year Final Occupancy %: {fmt(getattr(row, 'total_ly_occ', None), pct=True)}\n"
+            f"- Last Year Final Rooms Sold: {fmt(getattr(row, 'total_ly_rms', None))}\n"
+            f"- Last Year Final ADR: {fmt(getattr(row, 'total_ly_adr', None))}\n"
+            f"- Last Year Final Total Revenue: {fmt(getattr(row, 'total_ly_rev', None))}\n"
         )
+
+        # Build metadata safely
+        month_sort_val = getattr(row, "month_sort", None)
+        month_sort_val = int(month_sort_val) if month_sort_val is not None and pd.notna(month_sort_val) else None
 
         meta = {
             "type": "annual_summary",
             "property_id": PROPERTY_ID,
             "property_code": PROPERTY_CODE,
             "as_of_date": AS_OF_DATE,
+            "as_of_date_timestamp": as_of_ts,
             "client_id": CLIENT_ID,
             "year": y,
-            "month": m_str,          # ← keep string in metadata
-            "month_sort": row.get("month_sort"),  # optional helper for filters
-
-            "current_occ": row.get("current_occ"),
-            "current_rms": row.get("current_rms"),
-            "current_adr": row.get("current_adr"),
-            "current_rev": row.get("current_rev"),
-            "stly_occ": row.get("stly_occ"),
-            "stly_rms": row.get("stly_rms"),
-            "stly_adr": row.get("stly_adr"),
-            "stly_rev": row.get("stly_rev"),
-            "total_ly_occ": row.get("total_ly_occ"),
-            "total_ly_rms": row.get("total_ly_rms"),
-            "total_ly_adr": row.get("total_ly_adr"),
-            "total_ly_rev": row.get("total_ly_rev"),
+            "month": m_str,
+            "month_sort": month_sort_val,
+            "current_occ": getattr(row, "current_occ", None),
+            "current_rms": getattr(row, "current_rms", None),
+            "current_adr": getattr(row, "current_adr", None),
+            "current_rev": getattr(row, "current_rev", None),
+            "stly_occ": getattr(row, "stly_occ", None),
+            "stly_rms": getattr(row, "stly_rms", None),
+            "stly_adr": getattr(row, "stly_adr", None),
+            "stly_rev": getattr(row, "stly_rev", None),
+            "total_ly_occ": getattr(row, "total_ly_occ", None),
+            "total_ly_rms": getattr(row, "total_ly_rms", None),
+            "total_ly_adr": getattr(row, "total_ly_adr", None),
+            "total_ly_rev": getattr(row, "total_ly_rev", None),
         }
 
-        # ID uses month string; make it filesystem/db friendly
+        # Stable, readable ID
+        y_str = str(y) if y is not None else "UnknownYear"
         month_slug = re.sub(r"[^A-Za-z0-9]+", "-", m_str).strip("-") if m_str else "Unknown"
-        base_id = f"annual_summary_{PROPERTY_CODE}_{AS_OF_DATE}_{y}-{month_slug}"  # e.g., ..._2025-September
+        base_id = f"annual_summary_{PROPERTY_CODE}_{AS_OF_DATE}_{y_str}-{month_slug}"
 
         uid = base_id
         n = 2
@@ -310,7 +308,6 @@ def annual_summary_docs(
         ids.append(uid)
 
     return docs, metadatas, ids
-
 
 def traverse_json(obj, parent_key=""):
     """
@@ -327,4 +324,5 @@ def traverse_json(obj, parent_key=""):
     else:
         # leaf node → convert into text + metadata
         yield str(obj), {"path": parent_key}
-        
+
+

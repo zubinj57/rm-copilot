@@ -2762,7 +2762,7 @@ def get_PerformanceMonitor(PROPERTY_ID, PROPERTY_CODE, AS_OF_DATE, CLIENT_ID, co
         error_list.append(f"{err_msg}\nTraceback:\n{traceback_info}")
         return None, error_list
 
-def get_AnnualSummary(PROPERTY_ID, PROPERTY_CODE, AS_OF_DATE, CLIENT_ID, conn):
+def get_annual_summary(PROPERTY_ID, PROPERTY_CODE, AS_OF_DATE, CLIENT_ID, conn):
   try:
       error_list = []
       total_ly_query = """
@@ -2784,7 +2784,6 @@ def get_AnnualSummary(PROPERTY_ID, PROPERTY_CODE, AS_OF_DATE, CLIENT_ID, conn):
           "as_of_date": AS_OF_DATE,
           "property_code": PROPERTY_CODE
       })
-      print(total_ly_json[0])
       otb_query = """
           SELECT 
               "propertyCode",
