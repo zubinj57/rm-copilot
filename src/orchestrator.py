@@ -20,15 +20,16 @@ _MONTH_RE = re.compile(r"\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may
 _YEAR_RE = re.compile(r"\b(20\d{2}|19\d{2})\b")
 
 TRIGGERS = {
-"daily": {"revpar", "adr", "occupancy", "daily", "today"},
+"daily": {"revpar", "adr", "occupancy", "daily", "today", "OTB", "pickup", "pick-up", "pick up", "forecast"},
 "performance": {"performance", "property score", "score", "kpi"},
-"annual": {"annual", "monthly", "month", "yearly", "year", "forecast", "trend", "otb", "stly"},
+"annual": {"annual", "monthly", "month", "yearly", "year", "forecast", "trend", "OTB", "stly"},
 }
 
 def _extract_entities(q: str) -> Dict[str, Any]:
     ql = q.lower()
     month = None
     year = None
+    y = None
     m = _MONTH_RE.search(ql)
     if m:
         month = m.group(1)

@@ -38,7 +38,7 @@ JSON_SCHEMA_INSTRUCTION = (
     "suggested_actions (list of strings)."
 )
  
-def getChromaByPropertyCode(propertyCode: str, collection_name: str = "default_collection") -> Chroma:
+def getChromaByPropertyCode(propertyCode: str, collection_name: str = "annual_summary") -> Chroma:
     chroma = Chroma(
         collection_name=collection_name,
         persist_directory=propertyCode,

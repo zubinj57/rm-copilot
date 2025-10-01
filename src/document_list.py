@@ -13,8 +13,6 @@ from datetime import datetime, timezone
 # Document Preparation
 # -----------------------------------------------------------------------------
 
-
-
 def daily_summaries_docs(propertyCode, AsOfDate) -> Tuple[List[Document], List[Dict[str, Any]], List[str]]:
     """Convert daily summaries into Document objects, metadata, and IDs."""
     df = fetch_daily_summaries(propertyCode, AsOfDate)
@@ -246,6 +244,9 @@ def docs_annual_summary(
         # Access via attribute names
         y = int(row.year) if getattr(row, "year", None) is not None and pd.notna(row.year) else None
         m_str = getattr(row, "month_norm", "Unknown")
+        # Always capitalize month for consistency (e.g., "September")
+        if isinstance(m_str, str):
+            m_str = m_str.capitalize()
 
         text = (
             f"Annual Summary Snapshot AsOfDate: {AS_OF_DATE} (Year: {y}, Month: {m_str})\n\n"
@@ -276,7 +277,9 @@ def docs_annual_summary(
             "client_id": CLIENT_ID,
             "year": y,
             "month": m_str,
-            "month_sort": month_sort_val,
+            "month_sort": getattr(row, "month_sort", None),
+
+            # 🔹 Core KPIs
             "current_occ": getattr(row, "current_occ", None),
             "current_rms": getattr(row, "current_rms", None),
             "current_adr": getattr(row, "current_adr", None),
@@ -289,6 +292,16 @@ def docs_annual_summary(
             "total_ly_rms": getattr(row, "total_ly_rms", None),
             "total_ly_adr": getattr(row, "total_ly_adr", None),
             "total_ly_rev": getattr(row, "total_ly_rev", None),
+
+            # 🔹 Aliases
+            "otb": getattr(row, "current_rms", None),        # OTB = rooms sold
+            "rooms_sold": getattr(row, "current_rms", None),
+            "occupancy": getattr(row, "current_occ", None),
+            "occ": getattr(row, "current_occ", None),
+            "adr": getattr(row, "current_adr", None),
+            "rate": getattr(row, "current_adr", None),
+            "revenue": getattr(row, "current_rev", None),
+            "total_revenue": getattr(row, "current_rev", None),
         }
 
         # Stable, readable ID

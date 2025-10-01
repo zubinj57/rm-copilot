@@ -21,17 +21,24 @@ AllowedIngestType = Literal["daily_summary", "reservation", "performance_monitor
 
 class QueryRequest(BaseModel):
     query: str
-    params: Dict[str, Any] = {}
+    property_code: str
+    as_of_date: str
+    # params: Dict[str, Any] = {}
 
 @app.get("/query")
-async def query_endpoint(
+async def query_endpoint_get(
     property_code: str = Query(..., description="Hotel property code"),
     as_of_date: str = Query(..., description="As Of Date (YYYY-MM-DD)"),
     q: str = Query(..., description="Query to execute"),
 ):
-    # If handle_query is sync, calling it directly from async is fine.
-    
     return handle_query(q, property_code, as_of_date)
+
+# ---------------------------
+# POST endpoint (JSON body)
+# ---------------------------
+@app.post("/query")
+async def query_endpoint_post(req: QueryRequest):
+    return handle_query(req.query, req.property_code, req.as_of_date)
 
 @app.get("/ingest")
 async def ingest_endpoint(

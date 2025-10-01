@@ -45,13 +45,15 @@ class QuerySpec:
 
 def _parse_query(user_question: str, as_of: str) -> QuerySpec:
     ql = (user_question or "").lower()
-    # month/year from query
     m = _MONTH_RE.search(ql)
-    month = _MONTHS.get(m.group(1)[:3], None) if m else None
+    month = None
+    if m:
+        # store as normalized month string to match metadata
+        month = m.group(1).capitalize()  # e.g. "January"
+
     y = _YEAR_RE.search(ql)
     year = int(y.group(1)) if y else None
 
-    # If still missing, infer from AsOfDate
     try:
         asof_dt = datetime.strptime(as_of, "%Y-%m-%d")
         year = year or asof_dt.year
@@ -60,21 +62,28 @@ def _parse_query(user_question: str, as_of: str) -> QuerySpec:
 
     return QuerySpec(month=month, year=year, text=user_question)
 
-def _retrieve_docs(property_code: str, spec: QuerySpec, widen: int = 0) -> Tuple[List[str], List[str]]:
+
+def _retrieve_docs(property_code: str, as_of_date: str, spec: QuerySpec, widen: int = 0) -> Tuple[List[str], List[str]]:
     """Return (docs, source_ids). Widen=0 exact; 1 nearby months; 2 whole year; 3 neighboring years."""
     chroma = getChromaByPropertyCode(property_code)
     query_terms = [spec.text]
 
-    filters: Dict[str, Any] = {}
+    # ✅ Always build filter with a single root operator
+    filters_list: List[Dict[str, Any]] = [
+        {"type": {"$eq": "annual_summary"}},
+        {"property_code": {"$eq": property_code}},
+    ]
+
     if spec.year:
-        filters["year"] = spec.year
+        filters_list.append({"year": {"$eq": spec.year}})
     if spec.month:
-        filters["month"] = spec.month
+        filters_list.append({"month": {"$eq": spec.month}})
+
+    filters: Dict[str, Any] = {"$and": filters_list}
 
     def _do_search(ft: Dict[str, Any]) -> Tuple[List[str], List[str]]:
-        where = {"$and": [{"year": {"$eq": 2025}}, {"month": {"$eq": 1}}]}
         res = chroma.similarity_search_with_relevance_scores(
-            query_terms[0], k=12, filter={"where": where}
+            query_terms[0], k=12, filter=ft
         )
         docs = [d.page_content for d, _ in res]
         srcs = [getattr(d, "metadata", {}).get("source", "") for d, _ in res]
@@ -83,31 +92,53 @@ def _retrieve_docs(property_code: str, spec: QuerySpec, widen: int = 0) -> Tuple
     # Try in widening rings
     if widen == 0:
         return _do_search(filters)
+
     elif widen == 1:
-    # nearby months, same year
         docs, src = _do_search(filters)
         if docs:
             return docs, src
+        # try nearby months
         if spec.year and spec.month:
             for delta in (-1, 1, -2, 2):
-                mm = ((spec.month - 1 + delta) % 12) + 1
-                ft = {"year": spec.year, "month": mm}
+                ft = {
+                    "$and": [
+                        {"type": {"$eq": "annual_summary"}},
+                        {"property_code": {"$eq": property_code}},
+                        {"year": {"$eq": spec.year}},
+                        {"month": {"$eq": spec.month + delta}},
+                    ]
+                }
                 docs, src = _do_search(ft)
                 if docs:
                     return docs, src
         return [], []
+
     elif widen == 2:
-        ft = {"year": spec.year} if spec.year else {}
+        ft = {
+            "$and": [
+                {"type": {"$eq": "annual_summary"}},
+                {"property_code": {"$eq": property_code}},
+            ]
+        }
+        if spec.year:
+            ft["$and"].append({"year": {"$eq": spec.year}})
         return _do_search(ft)
-    else:
-        # neighboring years
+
+    else:  # widen == 3 → neighboring years
         if spec.year:
             for y in (spec.year - 1, spec.year + 1):
-                ft = {"year": y}
+                ft = {
+                    "$and": [
+                        {"type": {"$eq": "annual_summary"}},
+                        {"property_code": {"$eq": property_code}},
+                        {"year": {"$eq": y}},
+                    ]
+                }
                 docs, src = _do_search(ft)
                 if docs:
                     return docs, src
         return [], []
+
     
 def _confidence_from(docs: List[str], answer_text: str, kpi_count: int) -> float:
     base = 0.35 if docs else 0.15
@@ -123,7 +154,7 @@ def agent_handle(user_question: str, propertyCode: str, AsOfDate: str, force_bro
     docs: List[str] = []
     srcs: List[str] = []
     for widen in ([0, 1, 2, 3] if force_broaden else [0, 1, 2]):
-        docs, srcs = _retrieve_docs(propertyCode, spec, widen=widen)
+        docs, srcs = _retrieve_docs(propertyCode, AsOfDate, spec, widen=widen)
         if docs:
             break
 
