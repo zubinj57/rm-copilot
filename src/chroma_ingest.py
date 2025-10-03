@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from langchain_openai import OpenAIEmbeddings
 from .common import getChromaByPropertyCode, delete_vectors, ingest_vectors
-from .document_list import daily_summaries_docs, reservation_docs, performance_monitor_docs, docs_annual_summary
+from .document_list import daily_summaries_docs, reservation_docs, docs_performance_monitor, docs_annual_summary
 from utils.logger import get_custom_logger
 
 # -----------------------------------------------------------------------------
@@ -81,7 +81,7 @@ def ingest_performance_monitor(PROPERTY_ID="", PROPERTY_CODE="", AS_OF_DATE="", 
         chroma = getChromaByPropertyCode(PROPERTY_CODE,collection_name="performance_monitor")
  
         # Daily summaries
-        docs, metadatas, ids = performance_monitor_docs(PROPERTY_ID=PROPERTY_ID, PROPERTY_CODE=PROPERTY_CODE, AS_OF_DATE=AS_OF_DATE, CLIENT_ID=CLIENT_ID, conn=conn)
+        docs, metadatas, ids = docs_performance_monitor(PROPERTY_ID=PROPERTY_ID, PROPERTY_CODE=PROPERTY_CODE, AS_OF_DATE=AS_OF_DATE, CLIENT_ID=CLIENT_ID, conn=conn)
         if docs:
             texts = [doc.page_content for doc in docs]
             print(f"[Ingest] Ingesting {len(texts)} docs...")
@@ -105,7 +105,8 @@ def ingest_annual_summary(collection_name: str,
                           conn= None) -> None:
     try:
         logger.info(f"Starting {collection_name} ingestion for {PROPERTY_CODE} as of {AS_OF_DATE}")
-        chroma = getChromaByPropertyCode(PROPERTY_CODE, collection_name=collection_name)
+        property_db_dir = f"./{PROPERTY_CODE}"
+        chroma = getChromaByPropertyCode(PROPERTY_CODE, collection_name=collection_name, property_store_dir=property_db_dir)
         delete_vectors(PROPERTY_CODE, AS_OF_DATE, chroma)
         ingest_vectors(
             chroma,

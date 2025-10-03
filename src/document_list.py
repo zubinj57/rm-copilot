@@ -171,7 +171,7 @@ def reservation_docs(propertyCode, AsOfDate) -> Tuple[List[Document], List[Dict[
  
     return docs, metadatas, ids
  
-def performance_monitor_docs(PROPERTY_ID="", PROPERTY_CODE="", AS_OF_DATE="", CLIENT_ID="",conn= None) -> Tuple[List[Document], List[Dict[str, Any]], List[str]]:
+def docs_performance_monitor(PROPERTY_ID="", PROPERTY_CODE="", AS_OF_DATE="", CLIENT_ID="",conn= None) -> Tuple[List[Document], List[Dict[str, Any]], List[str]]:
     """Convert daily summaries into Document objects, metadata, and IDs."""
 
     response_json, error_list = get_PerformanceMonitor(PROPERTY_ID=PROPERTY_ID, PROPERTY_CODE=PROPERTY_CODE, AS_OF_DATE=AS_OF_DATE, CLIENT_ID=CLIENT_ID, conn=conn)

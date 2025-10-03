@@ -1,194 +1,252 @@
+# annual_summary_agent.py
 from __future__ import annotations
-
-import json
-import math
+import os
 import re
-from dataclasses import dataclass
-from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+import logging
+from typing import Dict, Any, List, Tuple, Optional
 
-from langchain.schema import HumanMessage
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_community.vectorstores import Chroma
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.documents import Document
+from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain.chains import create_retrieval_chain
 
-from src.common import (
-    llm,
-    SYSTEM_PREFIX,
-    JSON_SCHEMA_INSTRUCTION,
-    getChromaByPropertyCode,
-)
+from ..common import getChromaByPropertyCode
+from utils.logger import get_custom_logger
+logger = get_custom_logger(name="annual_summary_agent")
 
-SYSTEM = SYSTEM_PREFIX + " Scope: annual summary KPIs, trends, YoY/STLY/OTB analyses. Return JSON."
+# -----------------------
+# Config
+# -----------------------
+DEFAULT_PERSIST_ROOT = os.environ.get("CHROMA_DIR", "./chroma")
+MODEL_NAME = os.environ.get("LC_CHAT_MODEL", "gpt-4o-mini")
+EMBED_MODEL = os.environ.get("LC_EMBED_MODEL", "text-embedding-3-small")
 
-_MONTHS = {
-"jan": 1, "january": 1,
-"feb": 2, "february": 2,
-"mar": 3, "march": 3,
-"apr": 4, "april": 4,
-"may": 5,
-"jun": 6, "june": 6,
-"jul": 7, "july": 7,
-"aug": 8, "august": 8,
-"sep": 9, "sept": 9, "september": 9,
-"oct": 10, "october": 10,
-"nov": 11, "november": 11,
-"dec": 12, "december": 12,
+SYSTEM = """You are a hotel analytics assistant.
+Use ONLY the provided context to answer. If the answer isn’t in the context, say you don’t know.
+Cite sources as [S1], [S2], ... using the order the documents are provided in the context block."""
+
+# Month normalization
+MONTH_MAP = {
+    "jan": 1, "january": 1,
+    "feb": 2, "february": 2,
+    "mar": 3, "march": 3,
+    "apr": 4, "april": 4,
+    "may": 5,
+    "jun": 6, "june": 6,
+    "jul": 7, "july": 7,
+    "aug": 8, "august": 8,
+    "sep": 9, "sept": 9, "september": 9,
+    "oct": 10, "october": 10,
+    "nov": 11, "november": 11,
+    "dec": 12, "december": 12
 }
 
-_MONTH_RE = re.compile(r"\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b", re.I)
-_YEAR_RE = re.compile(r"\b(20\d{2}|19\d{2})\b")
+# -----------------------
+# Utilities
+# -----------------------
 
 
-@dataclass
-class QuerySpec:
-    month: Optional[int]
-    year: Optional[int]
-    text: str
+def _parse_month_year(text: str) -> Tuple[Optional[int], Optional[int]]:
+    t = text.lower().strip()
 
-def _parse_query(user_question: str, as_of: str) -> QuerySpec:
-    ql = (user_question or "").lower()
-    # month/year from query
-    m = _MONTH_RE.search(ql)
-    month = _MONTHS.get(m.group(1)[:3], None) if m else None
-    y = _YEAR_RE.search(ql)
-    year = int(y.group(1)) if y else None
+    # year
+    year = None
+    m = re.search(r"(20\d{2})", t)
+    if m:
+        year = int(m.group(1))
 
-    # If still missing, infer from AsOfDate
-    try:
-        asof_dt = datetime.strptime(as_of, "%Y-%m-%d")
-        year = year or asof_dt.year
-    except Exception:
-        pass
-
-    return QuerySpec(month=month, year=year, text=user_question)
-
-def _retrieve_docs(property_code: str, spec: QuerySpec, widen: int = 0) -> Tuple[List[str], List[str]]:
-    """Return (docs, source_ids). Widen=0 exact; 1 nearby months; 2 whole year; 3 neighboring years."""
-    chroma = getChromaByPropertyCode(property_code)
-    query_terms = [spec.text]
-
-    filters: Dict[str, Any] = {}
-    if spec.year:
-        filters["year"] = spec.year
-    if spec.month:
-        filters["month"] = spec.month
-
-    def _do_search(ft: Dict[str, Any]) -> Tuple[List[str], List[str]]:
-        where = {"$and": [{"year": {"$eq": 2025}}, {"month": {"$eq": 1}}]}
-        res = chroma.similarity_search_with_relevance_scores(
-            query_terms[0], k=12, filter={"where": where}
-        )
-        docs = [d.page_content for d, _ in res]
-        srcs = [getattr(d, "metadata", {}).get("source", "") for d, _ in res]
-        return docs, srcs
-
-    # Try in widening rings
-    if widen == 0:
-        return _do_search(filters)
-    elif widen == 1:
-    # nearby months, same year
-        docs, src = _do_search(filters)
-        if docs:
-            return docs, src
-        if spec.year and spec.month:
-            for delta in (-1, 1, -2, 2):
-                mm = ((spec.month - 1 + delta) % 12) + 1
-                ft = {"year": spec.year, "month": mm}
-                docs, src = _do_search(ft)
-                if docs:
-                    return docs, src
-        return [], []
-    elif widen == 2:
-        ft = {"year": spec.year} if spec.year else {}
-        return _do_search(ft)
-    else:
-        # neighboring years
-        if spec.year:
-            for y in (spec.year - 1, spec.year + 1):
-                ft = {"year": y}
-                docs, src = _do_search(ft)
-                if docs:
-                    return docs, src
-        return [], []
-    
-def _confidence_from(docs: List[str], answer_text: str, kpi_count: int) -> float:
-    base = 0.35 if docs else 0.15
-    base += 0.05 * min(kpi_count, 6)
-    # small nudge for longer answers (bounded)
-    base += min(len(answer_text) / 1200.0, 0.15)
-    return float(max(0.0, min(0.98, base)))
-
-def agent_handle(user_question: str, propertyCode: str, AsOfDate: str, force_broaden: bool = False, **_) -> Dict[str, Any]:
-    spec = _parse_query(user_question, AsOfDate)
-
-    # Retrieval with widening rings
-    docs: List[str] = []
-    srcs: List[str] = []
-    for widen in ([0, 1, 2, 3] if force_broaden else [0, 1, 2]):
-        docs, srcs = _retrieve_docs(propertyCode, spec, widen=widen)
-        if docs:
+    # month number or name
+    month = None
+    mnum = re.search(r"\b(1[0-2]|0?[1-9])\b", t)
+    # prefer named month if present to avoid catching dates in other places
+    mname = None
+    for name, num in MONTH_MAP.items():
+        if re.search(rf"\b{name}\b", t):
+            mname = num
             break
 
-    SYSTEM_MSG = SYSTEM + f"\nIf month/year are unclear, infer from AsOfDate={AsOfDate}. Always return valid JSON."
+    if mname:
+        month = mname
+    elif mnum:
+        # if a numeric month is present BUT the text also contains a day (like 2025-09-25)
+        # we keep it anyway—metadata filter will still work at month granularity
+        month = int(mnum.group(1))
 
-    schema_hint = (
-        JSON_SCHEMA_INSTRUCTION
-        + "\nRequired JSON keys: answer_text (string), kpis (array of {name,value,unit,period}), explanations (array of strings), confidence (0..1), sources (array), suggested_actions (array)."
-        + "\nIf evidence is thin, explain what’s missing and propose specific actions (e.g., re-ingest month X 20YY)."
+    return month, year
+
+def _widen_filters(base: Dict[str, Any], widen: int) -> Dict[str, Any]:
+    """
+    widen=0: exact (year + month if present)
+    widen=1: prev/this/next month (same year)
+    widen=2: whole year
+    widen=3: neighbor years (+/-1)
+    """
+    out = dict(base)
+    yr = base.get("year")
+    mo = base.get("month")
+    if widen == 0:
+        return out
+    if widen == 1 and yr and mo:
+        out.pop("month", None)
+        out["month_any_of"] = [((mo - 2) % 12) + 1, mo, (mo % 12) + 1]  # prev, this, next
+    elif widen == 2 and yr:
+        out.pop("month", None)
+        out.pop("month_any_of", None)
+    elif widen == 3 and yr:
+        out.pop("month", None)
+        out.pop("month_any_of", None)
+        out["year_any_of"] = [yr - 1, yr, yr + 1]
+    return out
+
+def _to_chroma_where(meta: Dict[str, Any]) -> Dict[str, Any]:
+    where = {}
+    if "year" in meta: where["year"] = meta["year"]
+    if "month" in meta: where["month"] = meta["month"]
+    if "month_any_of" in meta: where["month"] = {"$in": meta["month_any_of"]}
+    if "year_any_of" in meta: where["year"] = {"$in": meta["year_any_of"]}
+    return where
+
+def _build_rag_chain(retriever) -> Any:
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", SYSTEM + "\n\n<CONTEXT>\n{context}\n</CONTEXT>"),
+        ("human", "{input}")
+    ])
+    llm = ChatOpenAI(model=MODEL_NAME, temperature=0)
+    doc_chain = create_stuff_documents_chain(llm, prompt)
+    return create_retrieval_chain(retriever, doc_chain)
+
+def _make_mmr_retriever(vs: Chroma, where: Optional[Dict[str, Any]] = None, *, k=8, fetch_k=48, lambda_mult=0.7):
+    return vs.as_retriever(
+        search_type="mmr",
+        search_kwargs={
+            "k": k,
+            "fetch_k": fetch_k,
+            "lambda_mult": lambda_mult,
+            "where": where or {}
+        }
     )
 
-    content = "\n\n".join([
-        f"Question: {user_question}",
-        f"Property: {propertyCode}",
-        f"AsOfDate: {AsOfDate}",
-        ("Evidence:\n" + "\n---\n".join(docs[:8])) if docs else "Evidence: (no direct monthly docs found in narrow filters)",
-    ])
-
-    messages = [
-        HumanMessage(content=SYSTEM_MSG + "\n\n" + schema_hint + "\n\n" + content),
-    ]
-
+# -----------------------
+# Public Agent API
+# -----------------------
+def agent_handle(
+    user_question: str,
+    propertyCode: str,
+    AsOfDate: Optional[str] = None,
+    force_broaden: bool = False
+) -> Dict[str, Any]:
+    """
+    Returns:
+      {
+        "answer_text": str,
+        "kpis": list,
+        "explanations": list,
+        "confidence": float,
+        "sources": list[str],
+        "suggested_actions": list[str],
+        "requires_review": bool
+      }
+    """
     try:
-        resp = llm.generate([[m for m in messages]])
-        text = resp.generations[0][0].message.content
-        try:
-            parsed = json.loads(text)
-        except Exception:
-            parsed = {"answer_text": text}
+        # If user didn't give a year, fall back to AsOfDate's year
+        default_year: Optional[int] = None
+        if AsOfDate:
+            try:
+                default_year = int(AsOfDate[:4])
+            except Exception:
+                default_year = None
+
+        # ✅ Open the exact same store/collection as ingestion
+        #    (persist dir resolves to repo_root/<propertyCode> inside the helper)
+        vs = getChromaByPropertyCode(
+            propertyCode=propertyCode,
+            collection_name="annual_summary",          # <-- must match ingestion
+            property_store_dir=f"./{propertyCode}",    # <-- repo_root/<propertyCode>
+        )
+
+        # Parse query for month/year (prefer named months)
+        month, year = _parse_month_year(user_question)
+        if year is None:
+            year = default_year
+
+        base: Dict[str, Any] = {}
+        if year is not None:
+            base["year"] = int(year)
+        if month is not None:
+            base["month"] = int(month)
+
+        # Widening passes
+        passes = [0, 1, 2, 3] if not force_broaden else [2, 3, 1, 0]
+
+        picked_docs: List[Document] = []
+        used_where: Dict[str, Any] = {}
+        used_widen: Optional[int] = None
+
+        for widen in passes:
+            filt = _widen_filters(base, widen)
+            where = _to_chroma_where(filt)
+            retriever = _make_mmr_retriever(
+                vs, where=where, k=8, fetch_k=64, lambda_mult=0.65
+            )
+
+            # ✅ modern API (no deprecation warning)
+            docs = retriever.invoke(user_question)
+            logger.info(f"[{propertyCode}] widen={widen} where={where} -> {len(docs)} docs")
+
+            if len(docs) >= 4 or (widen >= 2 and len(docs) >= 2):
+                picked_docs = docs
+                used_where = where
+                used_widen = widen
+
+                chain = _build_rag_chain(retriever)
+                resp = chain.invoke({"input": user_question})
+                answer = (resp.get("answer") or resp.get("result") or "").strip()
+                ctx_docs: List[Document] = resp.get("context") or picked_docs
+
+                sources: List[str] = []
+                for d in ctx_docs:
+                    src = d.metadata.get("source") or d.metadata.get("path") or d.metadata.get("id") or "unknown"
+                    if src not in sources:
+                        sources.append(src)
+
+                if answer and answer.lower() not in {"i don't know", "i do not know", "unknown"}:
+                    confidence = 0.65 if widen <= 1 else 0.52
+                    return {
+                        "answer_text": answer,
+                        "kpis": [],
+                        "explanations": [],
+                        "confidence": round(confidence, 3),
+                        "sources": sources[:12],
+                        "suggested_actions": [],
+                        "requires_review": False,
+                    }
+                # else: keep widening
+
+        logger.warning(f"[{propertyCode}] Insufficient context after widening. Last where={used_where}")
+        return {
+            "answer_text": "insufficient data",
+            "kpis": [],
+            "explanations": [],
+            "confidence": 0.0,
+            "sources": [],
+            "suggested_actions": [
+                "Re-run ingestion for the requested month/year or property.",
+                "Broaden the query (e.g., remove exact month) or try a nearby month.",
+                "Verify documents have metadata: year, month, propertyCode, source."
+            ],
+            "requires_review": True,
+        }
+
     except Exception as e:
-        parsed = {"answer_text": f"LLM error: {e}"}
-
-    # Normalize/guarantee structure
-    answer_text = str(parsed.get("answer_text", "")).strip()
-    kpis = parsed.get("kpis") or []
-    explanations = parsed.get("explanations") or []
-    suggested = parsed.get("suggested_actions") or []
-
-    if not docs:
-        explanations = explanations + [
-            "No monthly/yearly documents were retrieved under the initial filters.",
-        ]
-        if spec.year and spec.month:
-            suggested = suggested + [
-                f"Check ingestion for {spec.year}-{spec.month:02d}.",
-                "Try removing the month filter to use full-year evidence.",
-            ]
-        else:
-            suggested = suggested + [
-                "Specify a month and year (e.g., ‘January 2025’) or request the full-year summary.",
-            ]
-
-    confidence = parsed.get("confidence")
-    if not isinstance(confidence, (int, float)):
-        confidence = _confidence_from(docs, answer_text, kpi_count=len(kpis))
-
-    result = {
-        "answer_text": answer_text or "No direct answer produced.",
-        "kpis": kpis,
-        "explanations": explanations,
-        "confidence": float(round(confidence, 3)),
-        "sources": srcs[:12],
-        "suggested_actions": suggested,
-    }
-
-    return result
-
-
+        logger.exception("annual_summary_agent failed")
+        return {
+            "answer_text": f"Error: {e}",
+            "kpis": [],
+            "explanations": [],
+            "confidence": 0.0,
+            "sources": [],
+            "suggested_actions": ["Check server logs and environment variables."],
+            "requires_review": True,
+        }
