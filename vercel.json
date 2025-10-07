@@ -1,0 +1,16 @@
+{
+  "functions": {
+    "api/index.py": {
+      "runtime": "python3.11",
+      "maxDuration": 10,
+      "memory": 1024,
+      "excludeFiles": "{.venv,venv,__pycache__,tests,*.md,*.ipynb}"
+    }
+  },
+  "routes": [
+    { "src": "/(.*)", "dest": "api/index.py" }
+  ],
+  "builds": [
+    { "src": "api/index.py", "use": "@vercel/python" }
+  ]
+}

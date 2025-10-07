@@ -98,3 +98,8 @@ async def ingest_endpoint(
 @app.get("/zubin")
 async def welcome_rm():
     return {"msg": "Welcome to the RM Copilot."}
+
+
+@app.get("/healthz")
+def health_check():
+    return {"status": "healthy"}
