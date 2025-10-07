@@ -4,9 +4,6 @@ langchain>=0.2.12
 langchain-openai>=0.1.17
 langchain-chroma>=0.1.2
 
-# Vector store
-chromadb>=0.5.4,<0.6.0
-
 # OpenAI SDK + tokenizer
 openai==1.52.0
 tiktoken==0.8.0

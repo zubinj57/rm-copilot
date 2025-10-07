@@ -1,0 +1,35 @@
+# venvs & caches
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.ipynb
+*.md
+*.log
+dist/
+build/
+.eggs/
+.mypy_cache/
+.pytype/
+.pytest_cache/
+.git/
+.gitignore
+
+# big local folders you don’t need on the server
+data/
+datasets/
+models/
+notebooks/
+assets/
+media/
+tmp/
+uploads/
+
+# your project specifics
+src/data/
+src/documents/
+src/ingest/
+src/prompts/
+tests/

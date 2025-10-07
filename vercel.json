@@ -1,9 +1,9 @@
 {
+  "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
-    "api/index.py": {
+    "api/**/*.py": {
       "maxDuration": 10,
-      "memory": 1024,
-      "excludeFiles": "{.venv,venv,__pycache__,tests,*.md,*.ipynb}"
+      "excludeFiles": "{.venv,venv,__pycache__,**/*.ipynb,**/*.md,tests/**,data/**,datasets/**,models/**,assets/**,media/**,tmp/**,uploads/**,src/data/**,src/documents/**,src/ingest/**,src/prompts/**}"
     }
   },
   "routes": [
