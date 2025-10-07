@@ -1,225 +1,190 @@
 from __future__ import annotations
+import os, re, json, logging, calendar
+from typing import Dict, Any, List, Tuple, Optional
+from langchain_openai import ChatOpenAI
+from langchain_chroma import Chroma
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.documents import Document
+from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain.chains import create_retrieval_chain
+from ..common import getChromaByPropertyCode
+from utils.logger import get_custom_logger
 
-import json
-import math
-import re
-from dataclasses import dataclass
-from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+logger = get_custom_logger("annual_summary_agent")
 
-from langchain.schema import HumanMessage
+# ---------------- CONFIG ----------------
+MODEL_NAME = os.getenv("LC_CHAT_MODEL", "gpt-4o-mini")
 
-from src.common import (
-    llm,
-    SYSTEM_PREFIX,
-    JSON_SCHEMA_INSTRUCTION,
-    getChromaByPropertyCode,
-)
+SYSTEM = """
+You are RM Copilot, a professional virtual revenue manager.
+You analyze retrieved Annual Summary data that includes numeric KPIs such as ADR, Occupancy, and Revenue.
 
-SYSTEM = SYSTEM_PREFIX + " Scope: annual summary KPIs, trends, YoY/STLY/OTB analyses. Return JSON."
+When asked for "highest" or "lowest" metrics:
+- Always compare all numeric values in the context before answering.
+- Identify the document with the **maximum or minimum numeric value** as relevant.
+- Never infer from wording like "peak" or "strong"; rely strictly on numbers.
+- Explicitly quote the month and year where the true maximum/minimum occurs.
+- If ADR values are listed, compute which month has the largest ADR value.
+- Never assume chronological order or semantic priority.
 
-_MONTHS = {
-"jan": 1, "january": 1,
-"feb": 2, "february": 2,
-"mar": 3, "march": 3,
-"apr": 4, "april": 4,
-"may": 5,
-"jun": 6, "june": 6,
-"jul": 7, "july": 7,
-"aug": 8, "august": 8,
-"sep": 9, "sept": 9, "september": 9,
-"oct": 10, "october": 10,
-"nov": 11, "november": 11,
-"dec": 12, "december": 12,
-}
+Respond only with valid JSON:
+{{
+  "answer_text": "...",
+  "kpis": [{{"name": "...", "value": ..., "unit": "...", "relevance": "..."}}],
+  "explanations": [{{"factor": "...", "impact_percent": ..., "evidence": "..."}}],
+  "confidence": float,
+  "sources": ["...", "..."],
+  "suggested_actions": ["...", "..."],
+  "requires_review": bool
+}}
+"""
 
-_MONTH_RE = re.compile(r"\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b", re.I)
-_YEAR_RE = re.compile(r"\b(20\d{2}|19\d{2})\b")
+MONTH_MAP = {m.lower(): i for i, m in enumerate(calendar.month_name) if m}
 
-
-@dataclass
-class QuerySpec:
-    month: Optional[int]
-    year: Optional[int]
-    text: str
-
-def _parse_query(user_question: str, as_of: str) -> QuerySpec:
-    ql = (user_question or "").lower()
-    m = _MONTH_RE.search(ql)
+# ---------------- HELPERS ----------------
+def _parse_month_year(text: str) -> Tuple[Optional[int], Optional[int]]:
+    text = text.lower()
+    year = None
+    m = re.search(r"(20\d{2})", text)
+    if m: year = int(m.group(1))
     month = None
-    if m:
-        # store as normalized month string to match metadata
-        month = m.group(1).capitalize()  # e.g. "January"
-
-    y = _YEAR_RE.search(ql)
-    year = int(y.group(1)) if y else None
-
-    try:
-        asof_dt = datetime.strptime(as_of, "%Y-%m-%d")
-        year = year or asof_dt.year
-    except Exception:
-        pass
-
-    return QuerySpec(month=month, year=year, text=user_question)
-
-
-def _retrieve_docs(property_code: str, as_of_date: str, spec: QuerySpec, widen: int = 0) -> Tuple[List[str], List[str]]:
-    """Return (docs, source_ids). Widen=0 exact; 1 nearby months; 2 whole year; 3 neighboring years."""
-    chroma = getChromaByPropertyCode(property_code)
-    query_terms = [spec.text]
-
-    # ✅ Always build filter with a single root operator
-    filters_list: List[Dict[str, Any]] = [
-        {"type": {"$eq": "annual_summary"}},
-        {"property_code": {"$eq": property_code}},
-    ]
-
-    if spec.year:
-        filters_list.append({"year": {"$eq": spec.year}})
-    if spec.month:
-        filters_list.append({"month": {"$eq": spec.month}})
-
-    filters: Dict[str, Any] = {"$and": filters_list}
-
-    def _do_search(ft: Dict[str, Any]) -> Tuple[List[str], List[str]]:
-        res = chroma.similarity_search_with_relevance_scores(
-            query_terms[0], k=12, filter=ft
-        )
-        docs = [d.page_content for d, _ in res]
-        srcs = [getattr(d, "metadata", {}).get("source", "") for d, _ in res]
-        return docs, srcs
-
-    # Try in widening rings
-    if widen == 0:
-        return _do_search(filters)
-
-    elif widen == 1:
-        docs, src = _do_search(filters)
-        if docs:
-            return docs, src
-        # try nearby months
-        if spec.year and spec.month:
-            for delta in (-1, 1, -2, 2):
-                ft = {
-                    "$and": [
-                        {"type": {"$eq": "annual_summary"}},
-                        {"property_code": {"$eq": property_code}},
-                        {"year": {"$eq": spec.year}},
-                        {"month": {"$eq": spec.month + delta}},
-                    ]
-                }
-                docs, src = _do_search(ft)
-                if docs:
-                    return docs, src
-        return [], []
-
-    elif widen == 2:
-        ft = {
-            "$and": [
-                {"type": {"$eq": "annual_summary"}},
-                {"property_code": {"$eq": property_code}},
-            ]
-        }
-        if spec.year:
-            ft["$and"].append({"year": {"$eq": spec.year}})
-        return _do_search(ft)
-
-    else:  # widen == 3 → neighboring years
-        if spec.year:
-            for y in (spec.year - 1, spec.year + 1):
-                ft = {
-                    "$and": [
-                        {"type": {"$eq": "annual_summary"}},
-                        {"property_code": {"$eq": property_code}},
-                        {"year": {"$eq": y}},
-                    ]
-                }
-                docs, src = _do_search(ft)
-                if docs:
-                    return docs, src
-        return [], []
-
-    
-def _confidence_from(docs: List[str], answer_text: str, kpi_count: int) -> float:
-    base = 0.35 if docs else 0.15
-    base += 0.05 * min(kpi_count, 6)
-    # small nudge for longer answers (bounded)
-    base += min(len(answer_text) / 1200.0, 0.15)
-    return float(max(0.0, min(0.98, base)))
-
-def agent_handle(user_question: str, propertyCode: str, AsOfDate: str, force_broaden: bool = False, **_) -> Dict[str, Any]:
-    spec = _parse_query(user_question, AsOfDate)
-
-    # Retrieval with widening rings
-    docs: List[str] = []
-    srcs: List[str] = []
-    for widen in ([0, 1, 2, 3] if force_broaden else [0, 1, 2]):
-        docs, srcs = _retrieve_docs(propertyCode, AsOfDate, spec, widen=widen)
-        if docs:
+    for name, num in MONTH_MAP.items():
+        if name and name in text:
+            month = num
             break
+    return month, year
 
-    SYSTEM_MSG = SYSTEM + f"\nIf month/year are unclear, infer from AsOfDate={AsOfDate}. Always return valid JSON."
+def _to_chroma_where(meta: Dict[str, Any]) -> Dict[str, Any]:
+    where = {}
+    if "year" in meta: where["year"] = meta["year"]
+    if "month" in meta: where["month"] = meta["month"]
+    return where
 
-    schema_hint = (
-        JSON_SCHEMA_INSTRUCTION
-        + "\nRequired JSON keys: answer_text (string), kpis (array of {name,value,unit,period}), explanations (array of strings), confidence (0..1), sources (array), suggested_actions (array)."
-        + "\nIf evidence is thin, explain what’s missing and propose specific actions (e.g., re-ingest month X 20YY)."
+def _build_chain(retriever) -> Any:
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", SYSTEM + "\n\n<CONTEXT>\n{context}\n</CONTEXT>"),
+        ("human", "{input}")
+    ])
+    llm = ChatOpenAI(model=MODEL_NAME, temperature=0)
+    doc_chain = create_stuff_documents_chain(llm, prompt)
+    return create_retrieval_chain(retriever, doc_chain)
+
+def _make_mmr_retriever(vs: Chroma, where: Dict[str, Any], k: int = 8):
+    return vs.as_retriever(
+        search_type="mmr",
+        search_kwargs={"k": k, "fetch_k": 48, "lambda_mult": 1.0, "where": where or {}}
     )
 
-    content = "\n\n".join([
-        f"Question: {user_question}",
-        f"Property: {propertyCode}",
-        f"AsOfDate: {AsOfDate}",
-        ("Evidence:\n" + "\n---\n".join(docs[:8])) if docs else "Evidence: (no direct monthly docs found in narrow filters)",
-    ])
+def _get_all_year_docs(vs, year: int) -> list[Document]:
+    """Fetch all docs for a given year."""
+    res = vs._collection.get(
+        where={"year": {"$eq": year}},
+        include=["documents", "metadatas"]
+    )
+    if not res or not res.get("documents"):
+        return []
+    return [Document(page_content=d, metadata=m)
+            for d, m in zip(res["documents"], res["metadatas"])]
 
-    messages = [
-        HumanMessage(content=SYSTEM_MSG + "\n\n" + schema_hint + "\n\n" + content),
-    ]
+def _numeric_rank_docs(vs: Chroma, year: int, metric: str = "current_adr") -> List[Document]:
+    """Return all docs for that year sorted by metric descending."""
+    res = vs._collection.get(where={"year": {"$eq": year}}, include=["documents", "metadatas"])
+    if not res or not res.get("documents"):
+        return []
+    pairs = list(zip(res["metadatas"], res["documents"]))
+    pairs.sort(key=lambda x: float(x[0].get(metric, 0) or 0), reverse=True)
+    return [Document(page_content=d, metadata=m) for m, d in pairs]
 
+# ---------------- MAIN AGENT ----------------
+def agent_handle(user_question: str, propertyCode: str, AsOfDate: Optional[str] = None,
+                 force_broaden: bool = False) -> Dict[str, Any]:
     try:
-        resp = llm.generate([[m for m in messages]])
-        text = resp.generations[0][0].message.content
-        try:
-            parsed = json.loads(text)
-        except Exception:
-            parsed = {"answer_text": text}
-    except Exception as e:
-        parsed = {"answer_text": f"LLM error: {e}"}
+        default_year = int(AsOfDate[:4]) if AsOfDate else None
+        month, year = _parse_month_year(user_question)
+        year = year or default_year
 
-    # Normalize/guarantee structure
-    answer_text = str(parsed.get("answer_text", "")).strip()
-    kpis = parsed.get("kpis") or []
-    explanations = parsed.get("explanations") or []
-    suggested = parsed.get("suggested_actions") or []
+        vs = getChromaByPropertyCode(propertyCode, "annual_summary", f"./{propertyCode}")
+        picked_docs: List[Document] = []
 
-    if not docs:
-        explanations = explanations + [
-            "No monthly/yearly documents were retrieved under the initial filters.",
-        ]
-        if spec.year and spec.month:
-            suggested = suggested + [
-                f"Check ingestion for {spec.year}-{spec.month:02d}.",
-                "Try removing the month filter to use full-year evidence.",
-            ]
+        # Numeric-aware path for "highest"/"lowest" style questions
+        if year and "highest" in user_question.lower() and "adr" in user_question.lower():
+            all_docs = _get_all_year_docs(vs, year)
+            # sort by current_adr descending
+            all_docs.sort(key=lambda d: float(d.metadata.get("current_adr", 0) or 0), reverse=True)
+            picked_docs = all_docs[:12]  # all months if available
+            logger.info(f"[{propertyCode}] Numeric ADR retrieval: top doc = {picked_docs[0].metadata.get('month')} ADR={picked_docs[0].metadata.get('current_adr')}")
         else:
-            suggested = suggested + [
-                "Specify a month and year (e.g., ‘January 2025’) or request the full-year summary.",
-            ]
+            where = {"year": year} if year else {}
+            retriever = _make_mmr_retriever(vs, where)
+            picked_docs = retriever.invoke(user_question)
 
-    confidence = parsed.get("confidence")
-    if not isinstance(confidence, (int, float)):
-        confidence = _confidence_from(docs, answer_text, kpi_count=len(kpis))
+        if not picked_docs:
+            return {
+                "answer_text": "insufficient data",
+                "kpis": [], "explanations": [], "confidence": 0.0,
+                "sources": [], "suggested_actions": [
+                    "Re-ingest data or verify metadata year/month."
+                ],
+                "requires_review": True,
+            }
 
-    result = {
-        "answer_text": answer_text or "No direct answer produced.",
-        "kpis": kpis,
-        "explanations": explanations,
-        "confidence": float(round(confidence, 3)),
-        "sources": srcs[:12],
-        "suggested_actions": suggested,
-    }
+        # ✅ Build retriever without duplicate 'where'
+        retriever = _make_mmr_retriever(vs, where={"year": year}) if year else vs.as_retriever()
 
-    return result
+        # ✅ Build the RAG chain once — do NOT add 'where' again here
+        chain = _build_chain(retriever)
 
+        # ✅ Run the chain (no duplicate 'where' now)
+        resp = chain.invoke({"input": f"{user_question}\n\nFocus only on ADR numeric values and identify the month with the maximum ADR."})
+        print("🧠 LLM Raw Response:", resp)
+        answer = (resp.get("answer") or resp.get("result") or "").strip()
+        print("🧠 LLM Answer:", answer)
+        ctx_docs: List[Document] = resp.get("context") or picked_docs
 
+        # ✅ Collect sources for traceability
+        sources = []
+        for d in ctx_docs:
+            src = d.metadata.get("month") or d.metadata.get("id") or "unknown"
+            if src not in sources:
+                sources.append(src)
+
+        # ✅ Try parsing JSON from the LLM output
+        parsed = None
+        try:
+            parsed = json.loads(answer)
+        except Exception:
+            pass
+
+        def ensure_list(x): return x if isinstance(x, list) else []
+
+        if isinstance(parsed, dict):
+            return {
+                "answer_text": parsed.get("answer_text", ""),
+                "kpis": ensure_list(parsed.get("kpis")),
+                "explanations": ensure_list(parsed.get("explanations")),
+                "confidence": parsed.get("confidence", 0.75),
+                "sources": parsed.get("sources", sources[:12]),
+                "suggested_actions": ensure_list(parsed.get("suggested_actions")),
+                "requires_review": parsed.get("requires_review", False),
+            }
+
+        # ✅ Fallback plain text
+        return {
+            "answer_text": answer,
+            "kpis": [{"name": "ADR", "value": None, "unit": "USD", "relevance": "summary"}],
+            "explanations": [],
+            "confidence": 0.6,
+            "sources": sources[:12],
+            "suggested_actions": [],
+            "requires_review": False,
+        }
+
+    except Exception as e:
+        logger.exception("annual_summary_agent failed")
+        return {
+            "answer_text": f"Error: {e}",
+            "kpis": [], "explanations": [],
+            "confidence": 0.0, "sources": [],
+            "suggested_actions": ["Check logs and ensure Chroma store exists."],
+            "requires_review": True,
+        }

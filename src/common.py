@@ -3,7 +3,7 @@ import os
 import traceback
 from utils.logger import get_custom_logger
 from datetime import datetime, timedelta, timezone
-from typing import Tuple
+from typing import Tuple, Optional
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_chroma import Chroma
@@ -38,14 +38,36 @@ JSON_SCHEMA_INSTRUCTION = (
     "suggested_actions (list of strings)."
 )
  
-def getChromaByPropertyCode(propertyCode: str, collection_name: str = "annual_summary") -> Chroma:
-    chroma = Chroma(
+load_dotenv()
+
+OPENAI_KEY = os.getenv("OPENAI_API_KEY")
+if not OPENAI_KEY:
+    raise ValueError("OPENAI_API_KEY is not set.")
+
+emb = OpenAIEmbeddings(api_key=OPENAI_KEY)
+
+def getChromaByPropertyCode(
+    propertyCode: str,
+    collection_name: str,
+    property_store_dir: Optional[str] = None,
+) -> Chroma:
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if property_store_dir:
+        if os.path.isabs(property_store_dir):
+            persist_path = property_store_dir
+        else:
+            persist_path = os.path.normpath(os.path.join(repo_root, property_store_dir))
+    else:
+        persist_path = os.path.join(repo_root, propertyCode)
+
+    os.makedirs(persist_path, exist_ok=True)
+
+
+    return Chroma(
         collection_name=collection_name,
-        persist_directory=propertyCode,
+        persist_directory=persist_path,
         embedding_function=emb,
     )
-    return chroma
-
 # -----------------------------------------------------------------------------
 # Defining Cutoff Date for Deletion and Ingestion
 # -----------------------------------------------------------------------------
@@ -61,7 +83,7 @@ def cutoff_ts(as_of_date: str, days: int = 7) -> Tuple[int, datetime, int]:
 def delete_vectors(propertyCode: str, AsOfDate: str, chroma: Chroma ) -> None:
     try:
         collection = chroma._collection
-        asof_timestamp, cutoff_date, cutoff_timestamp = cutoff_ts(AsOfDate, days=7)
+        asof_timestamp, cutoff_date, cutoff_timestamp = cutoff_ts(AsOfDate, days=1)
         logger.info(f"Documents in collection: {collection.count()}")
         logger.info(f"Deleting documents older than {cutoff_date} from collection {collection.name}")
         res = collection.get(

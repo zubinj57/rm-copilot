@@ -2,7 +2,7 @@ import os
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
-
+import traceback
 
 load_dotenv()
 
@@ -17,20 +17,38 @@ def get_pg_conn():
 )
 
 def fetch_one(query, params=None):
+    """Fetch a single record as dict."""
     conn = get_pg_conn()
-    with conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute(query, params or ())
-        res = cur.fetchone()
-    conn.close()
-    return res
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            print(f"Running SQL: {query}")
+            if params:
+                print(f"With params: {params}")
+            cur.execute(query, params or ())
+            res = cur.fetchone()
+            return res
+    except Exception as e:
+        print("❌ [DB ERROR] fetch_one failed:", e)
+        traceback.print_exc()
+        raise
+    finally:
+        conn.close()
 
 def fetch_all(query, params=None):
+    """Fetch all records as list of dicts."""
     conn = get_pg_conn()
-    with conn.cursor(cursor_factory=RealDictCursor) as cur:
-        print("Running SQL:", query)
-        print("With params:", params)
-        cur.execute(query, params or ())
-        res = cur.fetchall()
-    conn.close()
-    print("Rows returned:", len(res))
-    return res
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            print(f"Running SQL: {query}")
+            if params:
+                print(f"With params: {params}")
+            cur.execute(query, params or ())
+            res = cur.fetchall()
+            print(f"Rows returned: {len(res)}")
+            return res
+    except Exception as e:
+        print("❌ [DB ERROR] fetch_all failed:", e)
+        traceback.print_exc()
+        raise
+    finally:
+        conn.close()
