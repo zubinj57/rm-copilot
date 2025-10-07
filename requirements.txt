@@ -1,24 +1,18 @@
-# Core LangChain ecosystem
-chromadb>=0.5.4,<0.6
-langchain>=0.2.12
-langchain-openai>=0.1.17
-langchain-chroma>=0.1.2
-
-# OpenAI SDK + tokenizer
-openai==1.52.0
-tiktoken==0.8.0
-
-# Database drivers
-psycopg2-binary==2.9.9
-sqlalchemy==2.0.35
-mysql-connector-python==9.0.0
-pymysql==1.1.1
-
-# Utilities
-python-dotenv==1.0.1
-pandas==2.2.3
-tqdm==4.66.5
-
-# HTTP & validation stability pins
-httpx==0.27.2
+fastapi==0.115.0
 pydantic==2.10.6
+httpx==0.27.2
+
+# LLM + RAG (keep only what you actually use at request time)
+openai==1.52.0
+langchain==0.2.12
+langchain-openai==0.1.17
+langchain-chroma==0.1.2
+chromadb==0.5.4
+
+# DB stack (pick ONLY what you need)
+SQLAlchemy==2.0.35
+mysql-connector-python==9.0.0
+
+# Optional (ONLY if used in your request path)
+tiktoken==0.8.0
+python-dotenv==1.0.1
